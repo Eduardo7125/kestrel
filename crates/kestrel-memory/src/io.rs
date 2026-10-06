@@ -98,12 +98,21 @@ impl Ticket {
     }
 }
 
+/// Counters shared by the workers. Kept apart from the engine so a worker
+/// never holds a strong reference to it: the engine must always be dropped
+/// by its owner, whose drop joins the workers *before* the owner frees the
+/// buffers that queued reads still target.
+#[derive(Default)]
+pub struct IoStats {
+    pub bytes_read: AtomicU64,
+    pub service_ns: AtomicU64,
+}
+
 pub struct IoEngine {
     tx: Mutex<Option<Sender<ChunkJob>>>,
     workers: Mutex<Vec<std::thread::JoinHandle<()>>>,
     pub n_workers: usize,
-    pub bytes_read: AtomicU64,
-    pub service_ns: AtomicU64,
+    pub stats: Arc<IoStats>,
 }
 
 impl IoEngine {
@@ -111,17 +120,11 @@ impl IoEngine {
         let n_workers = n_workers.max(1);
         let (tx, rx) = channel::<ChunkJob>();
         let rx = Arc::new(Mutex::new(rx));
-        let eng = Arc::new(IoEngine {
-            tx: Mutex::new(Some(tx)),
-            workers: Mutex::new(Vec::new()),
-            n_workers,
-            bytes_read: AtomicU64::new(0),
-            service_ns: AtomicU64::new(0),
-        });
+        let eng = Arc::new(IoEngine { tx: Mutex::new(Some(tx)), workers: Mutex::new(Vec::new()), n_workers, stats: Arc::new(IoStats::default()) });
         let mut ws = Vec::new();
         for i in 0..n_workers {
             let rx: Arc<Mutex<Receiver<ChunkJob>>> = rx.clone();
-            let weak = Arc::downgrade(&eng);
+            let stats = eng.stats.clone();
             ws.push(
                 std::thread::Builder::new()
                     .name(format!("kestrel-io-{i}"))
@@ -140,10 +143,8 @@ impl IoEngine {
                         };
                         job.ticket.service_ns.fetch_add(ns, Ordering::Relaxed);
                         job.ticket.bytes.fetch_add(job.required as u64, Ordering::Relaxed);
-                        if let Some(e) = weak.upgrade() {
-                            e.bytes_read.fetch_add(job.required as u64, Ordering::Relaxed);
-                            e.service_ns.fetch_add(ns, Ordering::Relaxed);
-                        }
+                        stats.bytes_read.fetch_add(job.required as u64, Ordering::Relaxed);
+                        stats.service_ns.fetch_add(ns, Ordering::Relaxed);
                         job.ticket.complete_chunk(err);
                     })
                     .expect("spawn io worker"),
@@ -165,11 +166,11 @@ impl IoEngine {
 impl Drop for IoEngine {
     fn drop(&mut self) {
         self.tx.lock().unwrap().take();
-        // Workers hold only a Weak to the engine; they exit when the channel closes.
+        // Workers finish every queued read, then exit when the channel closes.
+        // Joining them here is what makes it safe for the owner to free the
+        // destination buffers after dropping the engine.
         for w in self.workers.lock().unwrap().drain(..) {
-            if w.thread().id() != std::thread::current().id() {
-                let _ = w.join();
-            }
+            let _ = w.join();
         }
     }
 }

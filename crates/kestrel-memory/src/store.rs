@@ -197,6 +197,8 @@ struct Inner {
     order: Vec<usize>,
     file: Arc<ReadFile>,
     cfg: StoreConfig,
+    /// Declared before `state`: dropping it joins the workers before the
+    /// buffers their queued reads target are freed.
     io: Arc<IoEngine>,
     ledger: Arc<Ledger>,
     state: Mutex<State>,
@@ -284,18 +286,31 @@ impl WeightStore {
         let mut placement = Vec::with_capacity(n);
         let mut pending = Vec::new();
         let mut bufs: Vec<Option<(AlignedBuf, Reservation)>> = Vec::with_capacity(n);
-        for (g, &res) in resident.iter().enumerate() {
-            if res {
-                let r = ledger.reserve(Tier::Ram, layouts[g].buf_len as u64, "weights")?;
-                let mut buf = AlignedBuf::new(layouts[g].buf_len, DIRECT_ALIGN).map_err(|e| StoreError::Io(e.to_string()))?;
-                pending.push(layouts[g].issue(&io, &file, &mut buf));
-                bufs.push(Some((buf, r)));
-            } else {
-                bufs.push(None);
+        let mut alloc = || -> Result<(), StoreError> {
+            for (g, &res) in resident.iter().enumerate() {
+                if res {
+                    let r = ledger.reserve(Tier::Ram, layouts[g].buf_len as u64, "weights")?;
+                    let mut buf = AlignedBuf::new(layouts[g].buf_len, DIRECT_ALIGN).map_err(|e| StoreError::Io(e.to_string()))?;
+                    pending.push(layouts[g].issue(&io, &file, &mut buf));
+                    bufs.push(Some((buf, r)));
+                } else {
+                    bufs.push(None);
+                }
+            }
+            Ok(())
+        };
+        let allocated = alloc();
+        // Every issued read must finish before its buffer can be freed, even
+        // when a later reservation failed.
+        let mut read_err = None;
+        for t in pending {
+            if let Err(e) = t.wait() {
+                read_err.get_or_insert(StoreError::Io(e));
             }
         }
-        for t in pending {
-            t.wait().map_err(StoreError::Io)?;
+        allocated?;
+        if let Some(e) = read_err {
+            return Err(e);
         }
         if cfg.io_mode == IoMode::Buffered && cfg.drop_page_cache {
             file.drop_cache(0, model.file_size);
@@ -658,7 +673,7 @@ impl WeightStore {
     }
 
     pub fn metrics(&self) -> MetricsSnapshot {
-        self.inner.metrics.snapshot(self.inner.io.service_ns.load(Relaxed), self.inner.io.n_workers)
+        self.inner.metrics.snapshot(self.inner.io.stats.service_ns.load(Relaxed), self.inner.io.n_workers)
     }
 
     pub fn io_mode(&self) -> IoMode {
