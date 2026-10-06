@@ -1,0 +1,21 @@
+model synthetic-7b-Q4_K · 3.83 GB weights (3.64 GB in layers) · streaming arms: RAM budget 2.78 GB (~50% of layer bytes streamed)
+arms: resident, kestrel, no-prefetch, page-cache, llamacpp-cpu  ·  runs: 2 (interleaved)  ·  12 tokens
+  run 1 resident      decode    2.07 tok/s · prefill     2.7 tok/s · peak RSS   4.12 GB · hit  100% · stall   0.00s
+  run 1 kestrel       decode    1.46 tok/s · prefill     2.7 tok/s · peak RSS   2.45 GB · hit   77% · stall   1.66s
+  run 1 no-prefetch   decode    0.87 tok/s · prefill     2.6 tok/s · peak RSS   2.45 GB · hit   42% · stall   7.67s
+  run 1 page-cache    decode    1.47 tok/s · prefill     1.9 tok/s · peak RSS   2.45 GB · hit   42% · stall   6.99s
+  run 1 llamacpp-cpu  decode    4.68 tok/s · prefill    22.8 tok/s · peak RSS       0 B · hit    0% · stall   0.00s
+  run 2 resident      decode    2.18 tok/s · prefill     2.9 tok/s · peak RSS   4.12 GB · hit  100% · stall   0.00s
+  run 2 kestrel       decode    1.46 tok/s · prefill     2.9 tok/s · peak RSS   2.45 GB · hit   73% · stall   2.09s
+  run 2 no-prefetch   decode    0.79 tok/s · prefill     2.7 tok/s · peak RSS   2.45 GB · hit   42% · stall   9.23s
+  run 2 page-cache    decode    1.46 tok/s · prefill     2.0 tok/s · peak RSS   2.45 GB · hit   42% · stall   6.98s
+  run 2 llamacpp-cpu  decode    4.81 tok/s · prefill    24.1 tok/s · peak RSS       0 B · hit    0% · stall   0.00s
+
+ARM            decode tok/s  prefill t/s   peak RSS  streamed/t     hit stall/tok    disk BW  prefetch  output
+resident        2.18 [2.07-2.18]          2.9    4.12 GB         0 B    100%    0.000s      0 B/s        0%  identical
+kestrel         1.46 [1.46-1.46]          2.9    2.45 GB     1.89 GB     77%    0.174s  2.83 GB/s      100%  identical
+no-prefetch     0.87 [0.79-0.87]          2.7    2.45 GB     1.74 GB     42%    0.769s  3.07 GB/s        0%  identical
+page-cache      1.47 [1.46-1.47]          2.0    2.45 GB     1.74 GB     42%    0.582s  4.43 GB/s        0%  identical
+llamacpp-cpu    4.81 [4.68-4.81]         24.1        0 B         0 B      0%    0.000s      0 B/s        0%  n/a
+               note: llama.cpp (mmap, own kernels, own placement); RSS not measured
+raw results → benchmarks/results/syn-7b-q4k-arms.json

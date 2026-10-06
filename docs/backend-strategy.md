@@ -75,22 +75,27 @@ backend's explicit streaming.
 
 ## 3. Backend interface
 
+The planner produces an `ExecutionPlan`. Backends consume it:
+
 ```rust
-pub trait Backend {
-    fn name(&self) -> &'static str;
-    fn caps(&self) -> BackendCaps;                  // tiers, quant types, granularity
-    fn load(&self, model: &ModelDesc, plan: &ExecutionPlan) -> Result<Box<dyn Session>>;
-}
-pub trait Session {
-    fn eval(&mut self, tokens: &[u32], pos: usize) -> Result<&[f32]>;  // logits of last token
-    fn reset(&mut self);
-    fn metrics(&self) -> MetricsSnapshot;
+// kestrel-backends
+pub trait InferenceSession: Send {
+    fn model_name(&self) -> &str;
+    fn render_chat(&self, messages: &[ChatMessage]) -> Result<String>;
+    fn tokenize(&self, text: &str) -> Vec<u32>;
+    fn generate(&mut self, prompt: &[u32], params: &GenParams,
+                on_text: &mut dyn FnMut(&str) -> bool) -> Result<GenStats>;
+    fn status(&self) -> serde_json::Value;   // metrics for /metrics
 }
 ```
 
-`BackendCaps` lets the planner adapt without knowing backend internals:
-`gpu: bool`, `placement_granularity: Layer | TensorGroup | Expert`,
-`supports_streaming: bool`, and `quant_types: Vec<GgmlType>`.
+`NativeSession::load(plan, gguf, model, opts)` builds the ledger, the
+`WeightStore` (resident mask, ring, I/O mode, prefetch depth from the plan) and
+the executor, and runs the rebalancer at safe points between tokens. The
+llama.cpp backend is a process: `llamacpp::spawn_server(plan.llamacpp_args, …)`.
+Backend capabilities are currently encoded in the planner (the native
+executor is CPU-only, and llama.cpp gets GPU candidates). A data-driven
+`BackendCaps` is the next step, once a second GPU path exists.
 
 ## 4. Path to native GPU execution (post-MVP)
 

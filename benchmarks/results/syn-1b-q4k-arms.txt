@@ -1,0 +1,41 @@
+model synthetic-1b-Q4_K · 636.0 MB weights (545.4 MB in layers) · streaming arms: RAM budget 710.1 MB (~50% of layer bytes streamed)
+arms: resident, kestrel, no-prefetch, page-cache, contiguous, lru-cache, belady-cache, llamacpp-cpu  ·  runs: 3 (interleaved)  ·  32 tokens
+  run 1 resident      decode    8.55 tok/s · prefill    16.4 tok/s · peak RSS  670.8 MB · hit  100% · stall   0.00s
+  run 1 kestrel       decode    6.74 tok/s · prefill    16.7 tok/s · peak RSS  455.2 MB · hit   86% · stall   0.98s
+  run 1 no-prefetch   decode    4.67 tok/s · prefill    14.3 tok/s · peak RSS  455.9 MB · hit   40% · stall   3.33s
+  run 1 page-cache    decode    6.44 tok/s · prefill     9.8 tok/s · peak RSS  456.1 MB · hit   40% · stall   2.60s
+  run 1 contiguous    decode    5.99 tok/s · prefill    17.1 tok/s · peak RSS  456.2 MB · hit   74% · stall   1.77s
+  run 1 lru-cache     decode    2.20 tok/s · prefill    13.6 tok/s · peak RSS  456.0 MB · hit    6% · stall  10.93s
+  run 1 belady-cache  decode    4.00 tok/s · prefill    15.8 tok/s · peak RSS  455.5 MB · hit   62% · stall   4.12s
+  run 1 llamacpp-cpu  decode   26.56 tok/s · prefill   148.7 tok/s · peak RSS       0 B · hit    0% · stall   0.00s
+  run 2 resident      decode    9.79 tok/s · prefill    17.5 tok/s · peak RSS  670.6 MB · hit  100% · stall   0.00s
+  run 2 kestrel       decode    7.59 tok/s · prefill    17.1 tok/s · peak RSS  455.2 MB · hit   81% · stall   0.97s
+  run 2 no-prefetch   decode    4.39 tok/s · prefill    16.3 tok/s · peak RSS  455.9 MB · hit   40% · stall   3.83s
+  run 2 page-cache    decode    6.92 tok/s · prefill    10.8 tok/s · peak RSS  456.1 MB · hit   40% · stall   2.42s
+  run 2 contiguous    decode    5.33 tok/s · prefill    15.8 tok/s · peak RSS  455.3 MB · hit   73% · stall   2.38s
+  run 2 lru-cache     decode    2.31 tok/s · prefill    14.3 tok/s · peak RSS  456.1 MB · hit    6% · stall  10.49s
+  run 2 belady-cache  decode    3.84 tok/s · prefill    16.2 tok/s · peak RSS  455.4 MB · hit   61% · stall   4.42s
+  run 2 llamacpp-cpu  decode   27.80 tok/s · prefill   117.3 tok/s · peak RSS       0 B · hit    0% · stall   0.00s
+  run 3 resident      decode   10.46 tok/s · prefill    16.7 tok/s · peak RSS  669.8 MB · hit  100% · stall   0.00s
+  run 3 kestrel       decode    7.52 tok/s · prefill    16.6 tok/s · peak RSS  455.3 MB · hit   83% · stall   0.87s
+  run 3 no-prefetch   decode    4.60 tok/s · prefill    16.3 tok/s · peak RSS  456.1 MB · hit   40% · stall   3.49s
+  run 3 page-cache    decode    6.92 tok/s · prefill     9.5 tok/s · peak RSS  456.2 MB · hit   40% · stall   2.54s
+  run 3 contiguous    decode    6.20 tok/s · prefill    16.8 tok/s · peak RSS  456.1 MB · hit   77% · stall   1.61s
+  run 3 lru-cache     decode    2.14 tok/s · prefill    13.5 tok/s · peak RSS  456.0 MB · hit    6% · stall  11.37s
+  run 3 belady-cache  decode    3.63 tok/s · prefill    15.6 tok/s · peak RSS  455.5 MB · hit   63% · stall   4.57s
+  run 3 llamacpp-cpu  decode   26.98 tok/s · prefill   140.6 tok/s · peak RSS       0 B · hit    0% · stall   0.00s
+
+ARM            decode tok/s  prefill t/s   peak RSS  streamed/t     hit stall/tok    disk BW  prefetch  output
+resident        9.79 [8.55-10.46]         16.7   670.8 MB         0 B    100%    0.000s      0 B/s        0%  identical
+kestrel         7.52 [6.74-7.59]         16.7   455.3 MB    272.7 MB     83%    0.030s  4.19 GB/s      100%  identical
+no-prefetch     4.60 [4.39-4.67]         16.3   456.1 MB    233.8 MB     40%    0.109s  6.33 GB/s        0%  identical
+page-cache      6.92 [6.44-6.92]          9.8   456.2 MB    233.8 MB     40%    0.079s 11.99 GB/s        0%  identical
+contiguous      5.99 [5.33-6.20]         16.8   456.2 MB    272.7 MB     74%    0.055s  2.82 GB/s      100%  identical
+               note: streamed layers contiguous
+lru-cache       2.20 [2.14-2.31]         13.6   456.1 MB    545.4 MB      6%    0.342s  4.09 GB/s        0%  identical
+               note: all layers through a 17-slot Lru cache of the same RAM
+belady-cache    3.84 [3.63-4.00]         15.8   455.5 MB    545.4 MB     62%    0.138s  1.93 GB/s      100%  identical
+               note: all layers through a 17-slot Belady cache of the same RAM
+llamacpp-cpu   26.98 [26.56-27.80]        140.6        0 B         0 B      0%    0.000s      0 B/s        0%  n/a
+               note: llama.cpp (mmap, own kernels, own placement); RSS not measured
+raw results → benchmarks/results/syn-1b-q4k-arms.json

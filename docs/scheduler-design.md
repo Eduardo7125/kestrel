@@ -175,7 +175,7 @@ still has the bytes.
 
 ## 6. Autotuning (Phase 7+)
 
-`kestrel benchmark --tune` runs short decode trials over a bounded candidate
+*(Planned; not implemented in the MVP.)* `kestrel benchmark --tune` would run short decode trials over a bounded candidate
 set: prefetch depth, I/O mode (direct/buffered), I/O workers, compute threads,
 and placement order. Each candidate must produce **bit-identical greedy tokens**
 to the baseline, and is kept only if median tok/s improves by ≥ 3% (Colibrì's

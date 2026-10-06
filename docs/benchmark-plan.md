@@ -42,20 +42,23 @@ Results live in `benchmarks/results/` as raw JSON plus a summary.
 
 ## 3. Arms (from the project brief §19)
 
-| # | Arm | How |
-|---|---|---|
-| 1 | Standard llama.cpp configuration | `llama-bench` / `llama-cli` with defaults (mmap, `-ngl` default) |
-| 2 | CPU-only | llama.cpp `-ngl 0`, and Kestrel native `--strategy ram` |
-| 3 | Normal GPU offload | llama.cpp with a hand-chosen `-ngl` (the user's usual practice) |
-| 4 | Kestrel | `kestrel run` (automatic plan) |
-| 5 | Kestrel without predictive prefetch | `--prefetch-depth 0` |
-| 6 | Kestrel without NVMe tiering | `--no-stream` (resident only. Fails or OOMs when the model does not fit, which is the point) |
-| 7 | Kestrel with page-cache (mmap-like) streaming | `--io buffered --prefetch-depth 0` |
-| 8 | Kestrel with contiguous vs interleaved placement | `--placement contiguous` |
-| 9 | Kestrel with LRU instead of static pin | `--policy lru` (shows the cyclic-scan cliff) |
+Implemented in `kestrel benchmark` (native arms) and run through `llama-bench`
+(llama.cpp arms):
 
-Arms 1 and 3 need llama.cpp binaries (`KESTREL_LLAMA_BENCH`). Arms 3 and 4 need
-a GPU for the GPU portion.
+| # | Arm (CLI name) | How |
+|---|---|---|
+| 1 | Standard llama.cpp (`llamacpp-cpu`; GPU arms on GPU hosts) | `llama-bench` defaults (mmap, own kernels, own placement) |
+| 2 | CPU-only, fully resident (`resident`) | Native executor, everything in RAM |
+| 3 | Normal GPU offload | llama.cpp with a hand-chosen `-ngl` (GPU host; not run yet) |
+| 4 | Kestrel (`kestrel`) | Planner placement: interleaved static pin + streaming ring, depth-2 prefetch, O_DIRECT |
+| 5 | Kestrel without predictive prefetch (`no-prefetch`) | `--prefetch-depth 0` (synchronous demand loads) |
+| 6 | Kestrel without NVMe tiering | `--no-stream`: refused with a diagnosis when the model does not fit (shown in the planner tests) |
+| 7 | OS-managed streaming (`page-cache`) | Buffered reads, no prefetch, page cache retained (≈ mmap behaviour) |
+| 8 | Contiguous placement (`contiguous`) | Streamed layers back to back instead of interleaved |
+| 9 | Same RAM as a cache (`lru-cache`, `belady-cache`) | No static pin: every layer through a ring of equal RAM, LRU or Belady eviction |
+
+Streaming arms share one RAM budget, chosen so that `--stream-fraction` of the
+layer bytes cannot be resident.
 
 ## 4. Workloads
 
@@ -76,7 +79,7 @@ a GPU for the GPU portion.
 | 3 | How much does prefetching help? | Arm 4 vs 5 across the memory sweep |
 | 4 | How large should the VRAM safety margin be? | Margin sweep {256 MiB … 1.5 GiB} × context; record OOM or fragmentation failures (GPU host) |
 | 5 | Which tensors benefit most from VRAM? | Attention-only vs FFN-only vs experts-on-CPU placements (llama.cpp `-ot`) at fixed VRAM |
-| 6 | Layer- vs tensor-level scheduling? | `--granularity layer` vs `attn-ffn` in the memory sweep |
+| 6 | Layer- vs tensor-level scheduling? | Groups are attention/FFN halves of a layer today; a `--granularity` switch is pending |
 | 7 | Cost of dynamic migration? | Time to promote or demote one layer; tok/s dip during migration |
 | 8 | How does NVMe latency affect generation? | O_DIRECT vs buffered; I/O worker count sweep; chunk-size sweep |
 | 9 | How does batch size change placement? | Prefill (S=512) vs decode (S=1) tok/s across the memory sweep. Streaming amortizes over S |

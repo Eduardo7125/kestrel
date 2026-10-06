@@ -1,0 +1,204 @@
+{
+  "hardware": {
+    "arch": "x86_64",
+    "cpu": {
+      "caches": [
+        {
+          "kind": "Data",
+          "level": 1,
+          "size": 32768
+        },
+        {
+          "kind": "Instruction",
+          "level": 1,
+          "size": 32768
+        },
+        {
+          "kind": "Unified",
+          "level": 2,
+          "size": 1048576
+        },
+        {
+          "kind": "Unified",
+          "level": 3,
+          "size": 34603008
+        }
+      ],
+      "logical_cores": 4,
+      "model": "Intel(R) Xeon(R) Processor @ 2.80GHz",
+      "numa_nodes": 1,
+      "physical_cores": 4,
+      "simd": [
+        "sse4.2",
+        "avx",
+        "avx2",
+        "fma",
+        "f16c",
+        "avx512f",
+        "avx512bw",
+        "avx512vnni"
+      ]
+    },
+    "fingerprint": "acd1f7e4ffd7f38e",
+    "gpus": [],
+    "measured": {
+      "cpu_gemv_bytes_per_s": {
+        "BF16": 3131243006.8422294,
+        "F16": 4302814528.178879,
+        "F32": 4364244914.775213,
+        "Q4_0": 11445886765.431452,
+        "Q4_1": 2261167503.3422313,
+        "Q4_K": 7013052331.198073,
+        "Q5_0": 1683159613.284403,
+        "Q5_1": 1588517369.295844,
+        "Q5_K": 1485127997.8490348,
+        "Q6_K": 9042774353.7853,
+        "Q8_0": 20975014190.59928
+      },
+      "disks": [
+        {
+          "cache_suspect": false,
+          "chunk": 4194304,
+          "latency_4k_us": 56.2025205,
+          "mode": "direct",
+          "path": "/tmp/claude-0/-home-user-kestrel/d3b689ee-a655-5598-b58c-3d72a779b997/scratchpad/kcache/kestrel-diskbench.bin",
+          "read_bw": 1200278033.4394617,
+          "read_bw_qd1": 1492693644.0273204,
+          "threads": 8
+        }
+      ],
+      "ram_read_bw": 28953588291.69724,
+      "ram_read_bw_1t": 8531121179.089297,
+      "when": 1791271296
+    },
+    "os": "linux",
+    "ram": {
+      "available": 15423332352,
+      "cgroup_limit": null,
+      "swap_total": 0,
+      "total": 16876511232
+    },
+    "storage": [
+      {
+        "available": 26393829376,
+        "capacity": 270553174016,
+        "device": "/dev/vda",
+        "filesystem": "ext4",
+        "kind": "virtual",
+        "model": null,
+        "mount_point": "/"
+      }
+    ]
+  },
+  "kestrel_version": "0.1.0",
+  "model": {
+    "arch": "llama",
+    "file_size": 636820320,
+    "fingerprint": "edb072858eb2f9ee",
+    "name": "synthetic-1b-Q4_K",
+    "path": "/tmp/claude-0/-home-user-kestrel/d3b689ee-a655-5598-b58c-3d72a779b997/scratchpad/syn-1b-q4k.gguf",
+    "quant": null,
+    "weight_bytes": 635990016
+  },
+  "runs": [
+    {
+      "arm": "kestrel",
+      "decode_tok_s": 1.9173648290524103,
+      "disk_bw": 1144557207.5273795,
+      "generated": 24,
+      "hit_rate": 0.40868794326241137,
+      "late_fraction": 0.6617063492063492,
+      "load_s": 0.267701433,
+      "note": "",
+      "output_hash": "08cb842f015d6e25",
+      "page_cache_growth": 86749184,
+      "peak_rss": 221802496,
+      "prefetch_accuracy": 0.998017839444995,
+      "prefill_tok_s": 6.86629015880983,
+      "prompt_tokens": 32,
+      "ram_budget": 215381606,
+      "resident_weight_bytes": 129576960,
+      "run": 0,
+      "stall_s": 7.514558759000001,
+      "stream_bytes": 12178702336,
+      "streamed_bytes_per_token": 506413056,
+      "ttft_s": 4.660449713
+    },
+    {
+      "arm": "no-prefetch",
+      "decode_tok_s": 1.6411105838849125,
+      "disk_bw": 3140303744.602983,
+      "generated": 24,
+      "hit_rate": 0.14893617021276595,
+      "late_fraction": 1.0,
+      "load_s": 0.259993444,
+      "note": "",
+      "output_hash": "08cb842f015d6e25",
+      "page_cache_growth": 96264192,
+      "peak_rss": 222486528,
+      "prefetch_accuracy": 0.0,
+      "prefill_tok_s": 6.698231528746318,
+      "prompt_tokens": 32,
+      "ram_budget": 215381606,
+      "resident_weight_bytes": 168521728,
+      "run": 0,
+      "stall_s": 10.506699581,
+      "stream_bytes": 11219238912,
+      "streamed_bytes_per_token": 467468288,
+      "ttft_s": 4.777380397
+    },
+    {
+      "arm": "kestrel",
+      "decode_tok_s": 1.9796577208450148,
+      "disk_bw": 1137919334.0831742,
+      "generated": 24,
+      "hit_rate": 0.28368794326241137,
+      "late_fraction": 0.8015873015873016,
+      "load_s": 0.259181692,
+      "note": "",
+      "output_hash": "08cb842f015d6e25",
+      "page_cache_growth": 129363968,
+      "peak_rss": 221814784,
+      "prefetch_accuracy": 0.998017839444995,
+      "prefill_tok_s": 8.068255049515406,
+      "prompt_tokens": 32,
+      "ram_budget": 215381606,
+      "resident_weight_bytes": 129576960,
+      "run": 1,
+      "stall_s": 8.336904534,
+      "stream_bytes": 12178702336,
+      "streamed_bytes_per_token": 506413056,
+      "ttft_s": 3.966161184
+    },
+    {
+      "arm": "no-prefetch",
+      "decode_tok_s": 1.6805859073003564,
+      "disk_bw": 3385575083.149933,
+      "generated": 24,
+      "hit_rate": 0.14893617021276595,
+      "late_fraction": 1.0,
+      "load_s": 0.256296763,
+      "note": "",
+      "output_hash": "08cb842f015d6e25",
+      "page_cache_growth": 138563584,
+      "peak_rss": 222617600,
+      "prefetch_accuracy": 0.0,
+      "prefill_tok_s": 7.380894305615686,
+      "prompt_tokens": 32,
+      "ram_budget": 215381606,
+      "resident_weight_bytes": 168521728,
+      "run": 1,
+      "stall_s": 10.130309155,
+      "stream_bytes": 11219238912,
+      "streamed_bytes_per_token": 467468288,
+      "ttft_s": 4.335517984
+    }
+  ],
+  "settings": {
+    "prompt_tokens": 32,
+    "runs": 2,
+    "stream_fraction": 0.9,
+    "stream_ram_budget": 492002918,
+    "tokens": 24
+  }
+}

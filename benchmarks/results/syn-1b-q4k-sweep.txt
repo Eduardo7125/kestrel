@@ -1,0 +1,60 @@
+== stream fraction 0.25
+model synthetic-1b-Q4_K · 636.0 MB weights (545.4 MB in layers) · streaming arms: RAM budget 846.5 MB (~25% of layer bytes streamed)
+arms: kestrel, no-prefetch  ·  runs: 2 (interleaved)  ·  24 tokens
+  run 1 kestrel       decode   10.50 tok/s · prefill    16.8 tok/s · peak RSS  590.8 MB · hit  100% · stall   0.01s
+  run 1 no-prefetch   decode    6.51 tok/s · prefill    15.9 tok/s · peak RSS  590.1 MB · hit   66% · stall   0.96s
+  run 2 kestrel       decode    9.87 tok/s · prefill    17.3 tok/s · peak RSS  590.8 MB · hit  100% · stall   0.01s
+  run 2 no-prefetch   decode    6.51 tok/s · prefill    15.4 tok/s · peak RSS  590.7 MB · hit   66% · stall   1.02s
+
+ARM            decode tok/s  prefill t/s   peak RSS  streamed/t     hit stall/tok    disk BW  prefetch  output
+kestrel        10.50 [9.87-10.50]         17.3   590.8 MB     95.7 MB    100%    0.000s  9.40 GB/s      100%  identical
+no-prefetch     6.51 [6.51-6.51]         15.9   590.7 MB     85.1 MB     66%    0.043s  9.15 GB/s        0%  identical
+raw results → benchmarks/results/syn-1b-q4k-sweep-0.25.json
+== stream fraction 0.5
+model synthetic-1b-Q4_K · 636.0 MB weights (545.4 MB in layers) · streaming arms: RAM budget 710.1 MB (~50% of layer bytes streamed)
+arms: kestrel, no-prefetch  ·  runs: 2 (interleaved)  ·  24 tokens
+  run 1 kestrel       decode    6.92 tok/s · prefill    15.8 tok/s · peak RSS  455.3 MB · hit   82% · stall   0.67s
+  run 1 no-prefetch   decode    2.82 tok/s · prefill    13.0 tok/s · peak RSS  456.2 MB · hit   40% · stall   4.11s
+  run 2 kestrel       decode    4.36 tok/s · prefill     7.7 tok/s · peak RSS  455.6 MB · hit   84% · stall   0.72s
+  run 2 no-prefetch   decode    3.47 tok/s · prefill     7.4 tok/s · peak RSS  456.3 MB · hit   40% · stall   2.68s
+
+ARM            decode tok/s  prefill t/s   peak RSS  streamed/t     hit stall/tok    disk BW  prefetch  output
+kestrel         6.92 [4.36-6.92]         15.8   455.6 MB    272.7 MB     84%    0.030s  4.05 GB/s      100%  identical
+no-prefetch     3.47 [2.82-3.47]         13.0   456.3 MB    233.8 MB     40%    0.171s  6.71 GB/s        0%  identical
+raw results → benchmarks/results/syn-1b-q4k-sweep-0.5.json
+== stream fraction 0.75
+model synthetic-1b-Q4_K · 636.0 MB weights (545.4 MB in layers) · streaming arms: RAM budget 573.8 MB (~75% of layer bytes streamed)
+arms: kestrel, no-prefetch  ·  runs: 2 (interleaved)  ·  24 tokens
+  run 1 kestrel       decode    3.47 tok/s · prefill     7.9 tok/s · peak RSS  319.1 MB · hit   72% · stall   2.21s
+  run 1 no-prefetch   decode    2.13 tok/s · prefill     6.6 tok/s · peak RSS  319.9 MB · hit   26% · stall   6.69s
+  run 2 kestrel       decode    2.47 tok/s · prefill     7.3 tok/s · peak RSS  319.3 MB · hit   54% · stall   4.89s
+  run 2 no-prefetch   decode    2.14 tok/s · prefill     6.8 tok/s · peak RSS  320.2 MB · hit   26% · stall   6.72s
+
+ARM            decode tok/s  prefill t/s   peak RSS  streamed/t     hit stall/tok    disk BW  prefetch  output
+kestrel         3.47 [2.47-3.47]          7.9   319.3 MB    409.1 MB     72%    0.204s  2.31 GB/s      100%  identical
+no-prefetch     2.14 [2.13-2.14]          6.8   320.2 MB    370.1 MB     26%    0.280s  4.18 GB/s        0%  identical
+raw results → benchmarks/results/syn-1b-q4k-sweep-0.75.json
+== stream fraction 0.9
+model synthetic-1b-Q4_K · 636.0 MB weights (545.4 MB in layers) · streaming arms: RAM budget 492.0 MB (~90% of layer bytes streamed)
+arms: kestrel, no-prefetch  ·  runs: 2 (interleaved)  ·  24 tokens
+  run 1 kestrel       decode    1.92 tok/s · prefill     6.9 tok/s · peak RSS  221.8 MB · hit   41% · stall   7.51s
+  run 1 no-prefetch   decode    1.64 tok/s · prefill     6.7 tok/s · peak RSS  222.5 MB · hit   15% · stall  10.51s
+  run 2 kestrel       decode    1.98 tok/s · prefill     8.1 tok/s · peak RSS  221.8 MB · hit   28% · stall   8.34s
+  run 2 no-prefetch   decode    1.68 tok/s · prefill     7.4 tok/s · peak RSS  222.6 MB · hit   15% · stall  10.13s
+
+ARM            decode tok/s  prefill t/s   peak RSS  streamed/t     hit stall/tok    disk BW  prefetch  output
+kestrel         1.98 [1.92-1.98]          8.1   221.8 MB    506.4 MB     41%    0.347s  1.14 GB/s      100%  identical
+no-prefetch     1.68 [1.64-1.68]          7.4   222.6 MB    467.5 MB     15%    0.438s  3.39 GB/s        0%  identical
+raw results → benchmarks/results/syn-1b-q4k-sweep-0.9.json
+== stream fraction 1.0
+model synthetic-1b-Q4_K · 636.0 MB weights (545.4 MB in layers) · streaming arms: RAM budget 437.5 MB (~100% of layer bytes streamed)
+arms: kestrel, no-prefetch  ·  runs: 2 (interleaved)  ·  24 tokens
+  run 1 kestrel       decode    1.90 tok/s · prefill    11.1 tok/s · peak RSS  182.9 MB · hit   21% · stall   9.11s
+  run 1 no-prefetch   decode    1.58 tok/s · prefill    11.7 tok/s · peak RSS  183.6 MB · hit   11% · stall  12.31s
+  run 2 kestrel       decode    1.81 tok/s · prefill    14.5 tok/s · peak RSS  182.5 MB · hit   23% · stall   9.67s
+  run 2 no-prefetch   decode    1.61 tok/s · prefill    12.9 tok/s · peak RSS  183.2 MB · hit   11% · stall  12.13s
+
+ARM            decode tok/s  prefill t/s   peak RSS  streamed/t     hit stall/tok    disk BW  prefetch  output
+kestrel         1.90 [1.81-1.90]         14.5   182.9 MB    545.4 MB     23%    0.403s  1.15 GB/s      100%  identical
+no-prefetch     1.61 [1.58-1.61]         12.9   183.6 MB    506.4 MB     11%    0.513s  2.82 GB/s        0%  identical
+raw results → benchmarks/results/syn-1b-q4k-sweep-1.0.json
