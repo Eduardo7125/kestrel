@@ -184,7 +184,7 @@ impl GgmlType {
     /// Bytes needed to store `n` elements (must be a multiple of the block size).
     pub fn bytes_for(self, n: u64) -> Option<u64> {
         let bs = self.block_size() as u64;
-        if n % bs != 0 {
+        if !n.is_multiple_of(bs) {
             return None;
         }
         Some(n / bs * self.type_size() as u64)

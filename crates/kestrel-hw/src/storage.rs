@@ -74,7 +74,7 @@ fn linux(p: &Path, info: &mut StorageInfo) {
                 continue;
             }
             let mp = PathBuf::from(f[1].replace("\\040", " "));
-            if p.starts_with(&mp) && best.as_ref().map_or(true, |b| mp.as_os_str().len() > b.0.as_os_str().len()) {
+            if p.starts_with(&mp) && best.as_ref().is_none_or(|b| mp.as_os_str().len() > b.0.as_os_str().len()) {
                 best = Some((mp, f[0].to_string(), f[2].to_string()));
             }
         }

@@ -236,7 +236,7 @@ pub fn matmul(t: GgmlType, w: &[u8], rows: usize, cols: usize, x: &[f32], out: &
     // Work in tiles of output rows; each tile writes a disjoint column range
     // of `out` for every activation row, so collect per tile then scatter.
     const TILE: usize = 16;
-    if !exact() && crate::qdot::supports(t) && cols % 32 == 0 {
+    if !exact() && crate::qdot::supports(t) && cols.is_multiple_of(32) {
         let qx: Vec<crate::qdot::Q8Row> = (0..s_rows).map(|s| crate::qdot::Q8Row::quantize(&x[s * cols..(s + 1) * cols])).collect();
         let tiles: Vec<(usize, Vec<f32>)> = (0..rows.div_ceil(TILE))
             .into_par_iter()

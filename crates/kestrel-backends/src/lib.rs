@@ -80,9 +80,9 @@ impl NativeSession {
                 min_available: b.ram.safety / 2,
                 tolerance: 0.02,
             });
-            // Only stream-capable placements can promote; a fully resident plan
-            // has nothing to promote but may still need to demote.
-            r.allow_promotion = plan.chosen.disk_weights > 0;
+            // Promotion is a no-op while nothing is streamed; after a demotion
+            // under pressure it lets a resident plan recover once memory frees up.
+            r.allow_promotion = true;
             r.pinned = model.groups.iter().filter(|g| g.layer.is_none()).map(|g| g.id).collect();
             r
         });
@@ -130,7 +130,7 @@ impl InferenceSession for NativeSession {
         let mut n = 0usize;
         let res = self.engine.generate(prompt, params, |piece| {
             n += 1;
-            if n % interval == 0 {
+            if n.is_multiple_of(interval) {
                 if let (Some(r), Some(s)) = (rebal.as_mut(), MemSample::now()) {
                     actions.extend(r.tick(&store, s));
                 }

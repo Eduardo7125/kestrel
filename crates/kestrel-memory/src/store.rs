@@ -234,7 +234,7 @@ impl WeightStore {
         for (i, &g) in order.iter().enumerate() {
             pos[g] = i;
         }
-        if pos.iter().any(|&p| p == usize::MAX) {
+        if pos.contains(&usize::MAX) {
             return Err(StoreError::Config("execution order must list every group".into()));
         }
         let file = Arc::new(ReadFile::open(&model.path, cfg.io_mode).map_err(|e| StoreError::Io(format!("{}: {e}", model.path.display())))?);
@@ -354,7 +354,7 @@ impl WeightStore {
                     sl.prefetched = false;
                     m.prefetch_used.fetch_add(1, Relaxed);
                 }
-                if sl.ticket.as_ref().map_or(true, |t| t.is_done()) {
+                if sl.ticket.as_ref().is_none_or(|t| t.is_done()) {
                     m.ring_ready.fetch_add(1, Relaxed);
                 } else {
                     m.ring_late.fetch_add(1, Relaxed);
@@ -407,7 +407,7 @@ impl WeightStore {
         let target = dist(group);
         // Never refill a slot whose previous load is still in flight: its
         // late-completing chunks would overwrite the new group's bytes.
-        let free = st.slots.iter().enumerate().filter(|(_, s)| s.leases == 0 && s.ticket.as_ref().map_or(true, |t| t.is_done()));
+        let free = st.slots.iter().enumerate().filter(|(_, s)| s.leases == 0 && s.ticket.as_ref().is_none_or(|t| t.is_done()));
         if let Some((i, _)) = free.clone().find(|(_, s)| s.group.is_none()) {
             return Some(i);
         }
@@ -492,7 +492,7 @@ impl WeightStore {
         st.placement[group] = Placement::Resident(Arc::new(GroupBuf { buf, _res: r }));
         // A ring copy is now redundant; free the slot for others.
         for s in st.slots.iter_mut() {
-            if s.group == Some(group) && s.leases == 0 && s.ticket.as_ref().map_or(true, |t| t.is_done()) {
+            if s.group == Some(group) && s.leases == 0 && s.ticket.as_ref().is_none_or(|t| t.is_done()) {
                 s.group = None;
                 s.ticket = None;
                 s.prefetched = false;
@@ -503,8 +503,11 @@ impl WeightStore {
     }
 
     /// Demote a resident group to streamed. Its buffer (and RAM reservation)
-    /// is freed as soon as the last outstanding lease drops. Requires a ring
-    /// large enough for the group; returns an error otherwise.
+    /// is freed as soon as the last outstanding lease drops. If no streaming
+    /// ring exists yet (the plan started fully resident), one is allocated
+    /// after the group's memory is released, sized for the largest layer
+    /// group so later demotions fit too; if even that fails the demotion is
+    /// reverted.
     pub fn demote(&self, group: usize) -> Result<(), StoreError> {
         let inner = &self.inner;
         let mut st = inner.state.lock().unwrap();
@@ -512,13 +515,36 @@ impl WeightStore {
             return Ok(());
         }
         let need = inner.layouts[group].buf_len;
-        if st.slots.is_empty() || st.slots[0].buf.len() < need {
-            return Err(StoreError::Config(format!(
-                "cannot demote group {group}: streaming ring slots are {} bytes, group needs {need}",
-                st.slots.first().map(|s| s.buf.len()).unwrap_or(0)
-            )));
+        let ring_ok = !st.slots.is_empty() && st.slots[0].buf.len() >= need;
+        if !ring_ok && st.slots.iter().any(|s| s.leases > 0 || s.ticket.as_ref().is_some_and(|t| !t.is_done())) {
+            return Err(StoreError::Config("cannot resize the streaming ring while it is in use".into()));
         }
-        st.placement[group] = Placement::Streamed;
+        let old = std::mem::replace(&mut st.placement[group], Placement::Streamed);
+        if !ring_ok {
+            drop(old); // release the group's reservation first (if unleased)
+            let slot_len = inner.model.groups.iter().filter(|g| g.layer.is_some()).map(|g| inner.layouts[g.id].buf_len).max().unwrap_or(need).max(need);
+            let n = inner.cfg.ring_slots.max(inner.cfg.prefetch_depth + 1);
+            let mut slots = Vec::with_capacity(n);
+            for _ in 0..n {
+                let alloc = inner
+                    .ledger
+                    .reserve(Tier::Ram, slot_len as u64, "stream-ring")
+                    .map_err(StoreError::from)
+                    .and_then(|r| AlignedBuf::new(slot_len, DIRECT_ALIGN).map(|b| (b, r)).map_err(|e| StoreError::Io(e.to_string())));
+                match alloc {
+                    Ok((buf, r)) => slots.push(Slot { buf, group: None, ticket: None, leases: 0, last_use: 0, prefetched: false, _res: r }),
+                    Err(e) => {
+                        drop(slots);
+                        drop(st);
+                        // Revert: bring the group back (its bytes are on disk).
+                        let _ = self.promote(group);
+                        inner.metrics.promotions.fetch_sub(1, Relaxed);
+                        return Err(e);
+                    }
+                }
+            }
+            st.slots = slots;
+        }
         inner.metrics.demotions.fetch_add(1, Relaxed);
         Ok(())
     }
@@ -561,13 +587,13 @@ impl WeightStore {
 }
 
 #[cfg(test)]
-mod tests {
+mod tests_support {
     use super::*;
     use kestrel_gguf::writer::{GgufWriter, TensorData};
     use kestrel_gguf::Value;
 
     /// A model with `layers` layers whose tensor bytes encode (tensor, index).
-    fn model(dir: &std::path::Path, layers: u32) -> Arc<ModelDesc> {
+    pub fn model(dir: &std::path::Path, layers: u32) -> Arc<ModelDesc> {
         let p = dir.join("m.gguf");
         let mut w = GgufWriter::new();
         w.kv("general.architecture", Value::String("llama".into()));
@@ -585,13 +611,19 @@ mod tests {
         Arc::new(ModelDesc::open(&p).unwrap())
     }
 
-    fn check(store: &WeightStore, m: &ModelDesc, raw: &[u8], g: usize) {
+    pub fn check(store: &WeightStore, m: &ModelDesc, raw: &[u8], g: usize) {
         let lease = store.lease(g).unwrap();
         for &ti in &m.groups[g].tensors {
             let t = &m.tensors[ti];
             assert_eq!(lease.tensor(ti), &raw[t.offset as usize..(t.offset + t.size) as usize], "tensor {}", t.name);
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::tests_support::*;
+    use super::*;
 
     fn run(policy: RingPolicy, depth: usize, slots: usize, resident_every: usize, mode: IoMode) -> MetricsSnapshot {
         let d = tempfile::tempdir().unwrap();
@@ -686,5 +718,49 @@ mod tests {
         }
         let s = store.metrics();
         assert_eq!((s.promotions, s.demotions), (1, 1));
+    }
+}
+
+#[cfg(test)]
+mod rebalance_tests {
+    use super::tests_support::*;
+    use super::*;
+    use crate::guard::{MemSample, MemoryGuard, RebalanceAction, Rebalancer};
+
+    #[test]
+    fn pressure_demotes_then_calm_promotes_without_changing_bytes() {
+        let d = tempfile::tempdir().unwrap();
+        let m = model(d.path(), 6);
+        let raw = std::fs::read(&m.path).unwrap();
+        let n = m.groups.len();
+        let ledger = Ledger::new(0, 1 << 30, 0);
+        let cfg = StoreConfig { ring_slots: 3, prefetch_depth: 2, ..StoreConfig::default() };
+        let store = WeightStore::new(m.clone(), &vec![true; n], (0..n).collect(), cfg, ledger.clone()).unwrap();
+        let mut r = Rebalancer::new(MemoryGuard { rss_limit: 100 << 20, min_available: 0, tolerance: 0.0 });
+        r.pinned = m.groups.iter().filter(|g| g.layer.is_none()).map(|g| g.id).collect();
+        let limit0 = ledger.usage(Tier::Ram).limit;
+
+        // RSS 1 MB over the limit (+256 MiB slack built into the guard).
+        let acts = r.tick(&store, MemSample { rss: (100 << 20) + (256 << 20) + (1 << 20), available: 8 << 30 });
+        assert!(!acts.is_empty() && acts.iter().all(|a| matches!(a, RebalanceAction::Demoted { .. })), "{acts:?}");
+        assert!(ledger.usage(Tier::Ram).limit < limit0, "ceiling lowered so freed room is not refilled");
+        let demoted = store.resident_mask().iter().filter(|r| !**r).count();
+        assert!(demoted >= 1);
+        for _ in 0..2 {
+            for g in 0..n {
+                check(&store, &m, &raw, g);
+            }
+        }
+        // Calm for `promote_after` ticks with plenty of headroom: promote one back.
+        ledger.set_limit(Tier::Ram, limit0);
+        let calm = MemSample { rss: 1 << 20, available: 8 << 30 };
+        let mut promoted = false;
+        for _ in 0..r.promote_after {
+            promoted |= r.tick(&store, calm).iter().any(|a| matches!(a, RebalanceAction::Promoted { .. }));
+        }
+        assert!(promoted);
+        for g in 0..n {
+            check(&store, &m, &raw, g);
+        }
     }
 }

@@ -213,7 +213,7 @@ impl Tokenizer {
             let mut best: Option<(usize, usize, u32)> = None;
             for (s, id) in &self.specials {
                 if let Some(p) = rest.find(s.as_str()) {
-                    if best.map_or(true, |(bp, bl, _)| p < bp || (p == bp && s.len() > bl)) {
+                    if best.is_none_or(|(bp, bl, _)| p < bp || (p == bp && s.len() > bl)) {
                         best = Some((p, s.len(), *id));
                     }
                 }
@@ -251,7 +251,7 @@ impl Tokenizer {
                 let cand = &s[syms[i].0..syms[i + 1].1];
                 if let Some(&id) = self.index.get(cand) {
                     let sc = self.scores[id as usize];
-                    if best.map_or(true, |(bs, _, _)| sc > bs) {
+                    if best.is_none_or(|(bs, _, _)| sc > bs) {
                         best = Some((sc, i, id));
                     }
                 }
@@ -294,7 +294,7 @@ impl Tokenizer {
                 let mut best: Option<(usize, usize)> = None;
                 for i in 0..parts.len().saturating_sub(1) {
                     if let Some(&r) = self.merges.get(&(parts[i].clone(), parts[i + 1].clone())) {
-                        if best.map_or(true, |(br, _)| r < br) {
+                        if best.is_none_or(|(br, _)| r < br) {
                             best = Some((r, i));
                         }
                     }

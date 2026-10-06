@@ -251,7 +251,7 @@ impl GgufFile {
                 return Err(GgufError::Corrupt(format!("tensor '{name}' offset {rel_offset} not aligned")));
             }
             let offset = data_offset + rel_offset;
-            if offset.checked_add(size).map_or(true, |end| end > file_size) {
+            if offset.checked_add(size).is_none_or(|end| end > file_size) {
                 return Err(GgufError::Corrupt(format!(
                     "tensor '{name}' [{offset}, +{size}) extends past end of file ({file_size} bytes) — truncated download?"
                 )));

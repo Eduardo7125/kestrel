@@ -252,7 +252,7 @@ pub fn hardware(model: Option<&ModelDesc>, no_bench: bool, quiet: bool) -> Hardw
     }
     let mut hw = HardwareProfile::discover(&paths);
     hw.load_cached_measurements(&profile_cache());
-    let need_disk = model.is_some_and(|m| hw.measured.as_ref().map_or(true, |x| x.disk_for(&m.path).is_none()));
+    let need_disk = model.is_some_and(|m| hw.measured.as_ref().is_none_or(|x| x.disk_for(&m.path).is_none()));
     if !no_bench && (hw.measured.is_none() || need_disk) {
         if !quiet {
             eprintln!("measuring this machine once (RAM, disk, CPU kernels; cached in {})…", profile_cache().display());

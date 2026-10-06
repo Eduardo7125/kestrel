@@ -266,7 +266,7 @@ pub fn plan(model: &ModelDesc, hw: &HardwareProfile, req: &PlanRequest) -> Resul
 
     let mut cands = Vec::new();
     let native_ok = req.native_support.is_ok();
-    let want = |be: Backend| req.backend.map_or(true, |x| x == be);
+    let want = |be: Backend| req.backend.is_none_or(|x| x == be);
     if want(Backend::LlamaCpp) && (req.llamacpp_available || req.backend == Some(Backend::LlamaCpp)) {
         if has_gpu {
             for experts_on_cpu in [false, true] {
