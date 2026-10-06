@@ -54,49 +54,53 @@ pub struct StoreConfig {
     /// page cache does not hold a second copy. `false` emulates mmap-style
     /// page-cache streaming.
     pub drop_page_cache: bool,
+    /// Routed-expert groups are managed by an [`crate::ExpertStore`]: the
+    /// weight store neither loads nor streams them.
+    #[serde(default)]
+    pub external_experts: bool,
 }
 
 impl Default for StoreConfig {
     fn default() -> Self {
-        StoreConfig { io_mode: IoMode::Direct, prefetch_depth: 2, ring_slots: 3, io_workers: 8, policy: RingPolicy::Belady, drop_page_cache: true }
+        StoreConfig { io_mode: IoMode::Direct, prefetch_depth: 2, ring_slots: 3, io_workers: 8, policy: RingPolicy::Belady, drop_page_cache: true, external_experts: false }
     }
 }
 
-/// Where each group's bytes sit inside its buffer.
-#[derive(Debug)]
-pub struct GroupLayout {
+/// A set of file extents laid out in one aligned buffer so that each can be
+/// read with direct I/O straight into place.
+#[derive(Debug, Clone)]
+pub struct ExtentLayout {
     /// (extent, buffer position of the aligned span, head = offset % align, span)
     pieces: Vec<(Extent, usize, usize, usize)>,
-    /// (tensor index, start in buffer, length)
-    tensors: Vec<(usize, usize, usize)>,
     pub buf_len: usize,
-    pub bytes: u64,
 }
 
-impl GroupLayout {
-    fn new(model: &ModelDesc, group: usize) -> Self {
-        let g = &model.groups[group];
+impl ExtentLayout {
+    pub fn new(extents: &[Extent]) -> Self {
         let a = DIRECT_ALIGN as u64;
         let mut pieces = Vec::new();
         let mut pos = 0usize;
-        for e in &g.extents {
+        for e in extents {
             let start = e.offset / a * a;
             let head = (e.offset - start) as usize;
             let span = ((e.offset + e.len).div_ceil(a) * a - start) as usize;
             pieces.push((*e, pos, head, span));
             pos += span;
         }
-        let mut tensors = Vec::new();
-        for &ti in &g.tensors {
-            let t = &model.tensors[ti];
-            let (e, bpos, head, _) = pieces.iter().find(|(e, ..)| t.offset >= e.offset && t.offset + t.size <= e.offset + e.len).expect("tensor inside its group's extents");
-            tensors.push((ti, bpos + head + (t.offset - e.offset) as usize, t.size as usize));
-        }
-        GroupLayout { pieces, tensors, buf_len: pos.max(DIRECT_ALIGN), bytes: g.bytes }
+        ExtentLayout { pieces, buf_len: pos.max(DIRECT_ALIGN) }
     }
 
-    /// Plan the chunk reads that fill `buf` with this group and submit them.
-    fn issue(&self, io: &IoEngine, file: &Arc<ReadFile>, buf: &mut AlignedBuf) -> Arc<Ticket> {
+    /// Buffer position of file range `[offset, offset+len)`, which must lie
+    /// inside one extent.
+    pub fn position(&self, offset: u64, len: u64) -> usize {
+        let (e, bpos, head, _) = self.pieces.iter().find(|(e, ..)| offset >= e.offset && offset + len <= e.offset + e.len).expect("range inside the layout's extents");
+        bpos + head + (offset - e.offset) as usize
+    }
+
+    /// Plan the chunk reads that fill `buf` and submit them.
+    pub(crate) fn issue(&self, io: &IoEngine, file: &Arc<ReadFile>, buf: &mut AlignedBuf) -> Arc<Ticket> {
+        // The I/O workers write through raw pointers: never trust the caller.
+        assert!(buf.len() >= self.buf_len, "buffer of {} bytes for a layout of {}", buf.len(), self.buf_len);
         let base = buf.as_mut_slice().as_mut_ptr();
         let mut plan = Vec::new();
         for &(e, bpos, head, span) in &self.pieces {
@@ -123,6 +127,32 @@ impl GroupLayout {
     }
 }
 
+/// Where each group's bytes sit inside its buffer.
+#[derive(Debug)]
+pub struct GroupLayout {
+    extents: ExtentLayout,
+    /// (tensor index, start in buffer, length)
+    tensors: Vec<(usize, usize, usize)>,
+    pub buf_len: usize,
+    pub bytes: u64,
+}
+
+impl GroupLayout {
+    fn new(model: &ModelDesc, group: usize) -> Self {
+        let g = &model.groups[group];
+        let extents = ExtentLayout::new(&g.extents);
+        let tensors = g.tensors.iter().map(|&ti| {
+            let t = &model.tensors[ti];
+            (ti, extents.position(t.offset, t.size), t.size as usize)
+        }).collect();
+        GroupLayout { buf_len: extents.buf_len, extents, tensors, bytes: g.bytes }
+    }
+
+    fn issue(&self, io: &IoEngine, file: &Arc<ReadFile>, buf: &mut AlignedBuf) -> Arc<Ticket> {
+        self.extents.issue(io, file, buf)
+    }
+}
+
 /// An owned buffer holding one resident group.
 pub struct GroupBuf {
     buf: AlignedBuf,
@@ -132,6 +162,8 @@ pub struct GroupBuf {
 enum Placement {
     Resident(Arc<GroupBuf>),
     Streamed,
+    /// Managed elsewhere (routed experts → ExpertStore).
+    External,
 }
 
 struct Slot {
@@ -242,6 +274,8 @@ impl WeightStore {
         cfg.io_mode = file.mode();
         let layouts: Vec<GroupLayout> = (0..n).map(|g| GroupLayout::new(&model, g)).collect();
         let io = IoEngine::new(cfg.io_workers);
+        let external: Vec<bool> = model.groups.iter().map(|g| cfg.external_experts && g.kind == kestrel_model::GroupKind::Experts).collect();
+        let resident: Vec<bool> = resident.iter().zip(&external).map(|(r, e)| *r && !e).collect();
 
         // Resident groups: reserve, allocate, read in parallel.
         let mut placement = Vec::with_capacity(n);
@@ -263,17 +297,18 @@ impl WeightStore {
         if cfg.io_mode == IoMode::Buffered && cfg.drop_page_cache {
             file.drop_cache(0, model.file_size);
         }
-        for b in bufs {
+        for (g, b) in bufs.into_iter().enumerate() {
             placement.push(match b {
                 Some((buf, r)) => Placement::Resident(Arc::new(GroupBuf { buf, _res: r })),
+                None if external[g] => Placement::External,
                 None => Placement::Streamed,
             });
         }
 
         // Ring: sized for the largest streamed group (or any group, so that
         // later demotions can stream through it).
-        let any_streamed = resident.iter().any(|r| !r);
-        let slot_len = layouts.iter().enumerate().filter(|(g, _)| !resident[*g]).map(|(_, l)| l.buf_len).max().unwrap_or(0);
+        let any_streamed = resident.iter().zip(&external).any(|(r, e)| !r && !e);
+        let slot_len = layouts.iter().enumerate().filter(|(g, _)| !resident[*g] && !external[*g]).map(|(_, l)| l.buf_len).max().unwrap_or(0);
         let mut slots = Vec::new();
         if any_streamed {
             if cfg.ring_slots < cfg.prefetch_depth + 1 {
@@ -322,6 +357,10 @@ impl WeightStore {
         matches!(self.inner.state.lock().unwrap().placement[group], Placement::Resident(_))
     }
 
+    pub fn is_external(&self, group: usize) -> bool {
+        matches!(self.inner.state.lock().unwrap().placement[group], Placement::External)
+    }
+
     pub fn resident_mask(&self) -> Vec<bool> {
         let st = self.inner.state.lock().unwrap();
         st.placement.iter().map(|p| matches!(p, Placement::Resident(_))).collect()
@@ -346,6 +385,9 @@ impl WeightStore {
             return Ok(Lease { store: Some(inner.clone()), slot: usize::MAX, resident: Some(buf), ptr, len, group });
         }
 
+        if matches!(st.placement[group], Placement::External) {
+            return Err(StoreError::Config(format!("group {group} is managed by the expert store")));
+        }
         let clock = st.clock;
         let slot = match st.slots.iter().position(|s| s.group == Some(group)) {
             Some(s) => {
@@ -463,7 +505,7 @@ impl WeightStore {
                 break;
             }
             let g = inner.order[(start + k) % n];
-            if matches!(st.placement[g], Placement::Resident(_)) {
+            if !matches!(st.placement[g], Placement::Streamed) {
                 continue;
             }
             found += 1;
@@ -632,7 +674,7 @@ mod tests {
         let n = m.groups.len();
         let resident: Vec<bool> = (0..n).map(|g| resident_every > 0 && g % resident_every == 0).collect();
         let order: Vec<usize> = (0..n).collect();
-        let cfg = StoreConfig { io_mode: mode, prefetch_depth: depth, ring_slots: slots, io_workers: 3, policy, drop_page_cache: true };
+        let cfg = StoreConfig { io_mode: mode, prefetch_depth: depth, ring_slots: slots, io_workers: 3, policy, drop_page_cache: true, external_experts: false };
         let ledger = Ledger::new(0, 1 << 30, 0);
         let store = WeightStore::new(m.clone(), &resident, order, cfg, ledger.clone()).unwrap();
         for _token in 0..4 {

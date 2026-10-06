@@ -98,7 +98,8 @@ def spm_vocab():
 
 
 def make_model(path, arch, tokenizer, *, n_embd=256, n_head=4, n_kv=2, n_ff=768, n_layer=3,
-               qkv_bias=False, qk_norm=False, tied=False, seed=0):
+               qkv_bias=False, qk_norm=False, tied=False, seed=0, n_expert=0, n_expert_used=0,
+               n_ff_exp=256, n_ff_shexp=0):
     rng = np.random.default_rng(seed)
     w = gguf.GGUFWriter(path, arch)
     w.add_name(os.path.basename(path).split(".")[0])
@@ -111,6 +112,12 @@ def make_model(path, arch, tokenizer, *, n_embd=256, n_head=4, n_kv=2, n_ff=768,
     w.add_rope_freq_base(10000.0)
     w.add_layer_norm_rms_eps(1e-6)
     w.add_file_type(0)
+    if n_expert:
+        w.add_expert_count(n_expert)
+        w.add_expert_used_count(n_expert_used)
+        w.add_expert_feed_forward_length(n_ff_exp)
+        if n_ff_shexp:
+            w.add_expert_shared_feed_forward_length(n_ff_shexp)
 
     if tokenizer == "bpe":
         vocab, merges = train_bpe(CORPUS, 220)
@@ -160,9 +167,20 @@ def make_model(path, arch, tokenizer, *, n_embd=256, n_head=4, n_kv=2, n_ff=768,
             w.add_tensor(p + "attn_k_norm.weight", norm(hd))
         w.add_tensor(p + "attn_output.weight", lin(n_embd, n_head * hd))
         w.add_tensor(p + "ffn_norm.weight", norm(n_embd))
-        w.add_tensor(p + "ffn_gate.weight", lin(n_ff, n_embd))
-        w.add_tensor(p + "ffn_up.weight", lin(n_ff, n_embd))
-        w.add_tensor(p + "ffn_down.weight", lin(n_embd, n_ff))
+        if n_expert:
+            w.add_tensor(p + "ffn_gate_inp.weight", lin(n_expert, n_embd, 4.0))
+            w.add_tensor(p + "ffn_gate_exps.weight", np.stack([lin(n_ff_exp, n_embd) for _ in range(n_expert)]))
+            w.add_tensor(p + "ffn_up_exps.weight", np.stack([lin(n_ff_exp, n_embd) for _ in range(n_expert)]))
+            w.add_tensor(p + "ffn_down_exps.weight", np.stack([lin(n_embd, n_ff_exp) for _ in range(n_expert)]))
+            if n_ff_shexp:
+                w.add_tensor(p + "ffn_gate_inp_shexp.weight", (rng.standard_normal(n_embd) / np.sqrt(n_embd)).astype(np.float32))
+                w.add_tensor(p + "ffn_gate_shexp.weight", lin(n_ff_shexp, n_embd))
+                w.add_tensor(p + "ffn_up_shexp.weight", lin(n_ff_shexp, n_embd))
+                w.add_tensor(p + "ffn_down_shexp.weight", lin(n_embd, n_ff_shexp))
+        else:
+            w.add_tensor(p + "ffn_gate.weight", lin(n_ff, n_embd))
+            w.add_tensor(p + "ffn_up.weight", lin(n_ff, n_embd))
+            w.add_tensor(p + "ffn_down.weight", lin(n_embd, n_ff))
     w.add_tensor("output_norm.weight", norm(n_embd))
     if not tied:
         w.add_tensor("output.weight", lin(n_vocab, n_embd, 4.0))
@@ -212,12 +230,19 @@ def main():
     make_model(f"{a.out}/qwen2-f32.gguf", "qwen2", "bpe", qkv_bias=True, tied=True, seed=2)
     make_model(f"{a.out}/qwen3-f32.gguf", "qwen3", "bpe", qk_norm=True, seed=3)
     make_model(f"{a.out}/llama-spm-f32.gguf", "llama", "spm", seed=4)
+    make_model(f"{a.out}/qwen3moe-f32.gguf", "qwen3moe", "bpe", qk_norm=True, seed=5, n_expert=8, n_expert_used=2)
+    make_model(f"{a.out}/qwen2moe-f32.gguf", "qwen2moe", "bpe", qkv_bias=True, seed=6, n_expert=8, n_expert_used=2, n_ff_shexp=512)
+    make_model(f"{a.out}/llama-moe-f32.gguf", "llama", "bpe", seed=7, n_expert=4, n_expert_used=2, n_ff_exp=768)
     if a.quantize:
         for q in QUANTS:
             dst = f"{a.out}/llama-bpe-{q}.gguf"
             subprocess.run([a.quantize, f"{a.out}/llama-bpe-f32.gguf", dst, q], check=True,
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             dequantize_to_f32(dst, f"{a.out}/llama-bpe-{q}-deq.gguf")
+        dst = f"{a.out}/qwen3moe-Q4_K_M.gguf"
+        subprocess.run([a.quantize, f"{a.out}/qwen3moe-f32.gguf", dst, "Q4_K_M"], check=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        dequantize_to_f32(dst, f"{a.out}/qwen3moe-Q4_K_M-deq.gguf")
     print("fixtures written to", a.out)
 
 

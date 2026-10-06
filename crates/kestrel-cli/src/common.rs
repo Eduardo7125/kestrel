@@ -49,6 +49,25 @@ pub enum PolicyArg {
 }
 
 #[derive(Clone, Copy, Debug, ValueEnum)]
+pub enum ExpertPolicyArg {
+    Lfru,
+    Lru,
+}
+
+impl Overrides {
+    pub fn native_options(&self) -> kestrel_backends::NativeOptions {
+        kestrel_backends::NativeOptions {
+            adaptive: !self.no_adapt,
+            expert_policy: match self.expert_policy {
+                ExpertPolicyArg::Lfru => kestrel_memory::ExpertPolicy::Lfru,
+                ExpertPolicyArg::Lru => kestrel_memory::ExpertPolicy::Lru,
+            },
+            usage_history: !self.no_usage_history,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
 pub enum StrategyArg {
     GpuFull,
     Hybrid,
@@ -117,6 +136,12 @@ pub struct Overrides {
     /// Disable runtime promotion/demotion of layers.
     #[arg(long)]
     pub no_adapt: bool,
+    /// Expert-cache policy for MoE models (lru is an ablation).
+    #[arg(long, value_enum, default_value = "lfru")]
+    pub expert_policy: ExpertPolicyArg,
+    /// Do not load or save the expert usage history (MoE warm start).
+    #[arg(long)]
+    pub no_usage_history: bool,
     /// Skip the automatic first-run hardware benchmark.
     #[arg(long)]
     pub no_bench: bool,

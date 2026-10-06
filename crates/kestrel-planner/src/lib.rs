@@ -146,6 +146,9 @@ pub struct Candidate {
     pub n_gpu_layers: Option<u32>,
     pub experts_on_cpu: bool,
     pub ring_bytes: u64,
+    /// Native MoE: routed experts held in the expert cache (count), out of
+    /// `n_expert × moe_layers`.
+    pub expert_cache: Option<u64>,
     pub estimate: Estimate,
     pub feasible: bool,
     pub reason: Option<String>,
@@ -332,6 +335,7 @@ pub fn plan(model: &ModelDesc, hw: &HardwareProfile, req: &PlanRequest) -> Resul
         io_workers: req.io_workers.unwrap_or(8),
         policy: req.ring_policy,
         drop_page_cache: req.io_mode != Some(IoMode::Buffered),
+        external_experts: best.expert_cache.is_some(),
     };
     let llamacpp_args = if best.backend == Backend::LlamaCpp { llamacpp_args(model, &best, n_ctx, req, threads) } else { Vec::new() };
     let alternatives = cands.into_iter().filter(|c| !(c.kind == best.kind && c.backend == best.backend && c.experts_on_cpu == best.experts_on_cpu)).collect();
@@ -362,15 +366,33 @@ pub fn plan(model: &ModelDesc, hw: &HardwareProfile, req: &PlanRequest) -> Resul
 fn cpu_candidate(model: &ModelDesc, b: &Budgets, bw: &Bandwidths, req: &PlanRequest, n_ctx: u64, kv_bytes: u64, backend: Backend) -> Candidate {
     let n = model.groups.len();
     let mut tiers = vec![Tier::Ram; n];
-    let total = model.weight_bytes();
-    let ram_for_weights = b.ram.usable.saturating_sub(kv_bytes);
+    // Native MoE: routed experts are managed by the expert cache, not by
+    // layer streaming. Reserve room for the scratch buffers that serve
+    // non-cached experts, place the dense part, and give the rest to the cache.
+    let native_moe = backend == Backend::Native && model.moe.is_some();
+    let is_exp = |g: &kestrel_model::TensorGroup| native_moe && g.kind == GroupKind::Experts;
+    let (expert_total, expert_unit, n_experts_total, k_used) = match (&model.moe, native_moe) {
+        (Some(m), true) => {
+            let total: u64 = model.groups.iter().filter(|g| g.kind == GroupKind::Experts).map(|g| g.bytes).sum();
+            let n = m.n_expert as u64 * m.moe_layers as u64;
+            // Mixed quantizations make expert sizes differ by layer: budget
+            // with the largest buffer, account bytes with the average.
+            let largest = model.groups.iter().filter(|g| g.kind == GroupKind::Experts).map(|g| g.bytes / m.n_expert as u64).max().unwrap_or(0);
+            (total, largest + 3 * 4096, n, m.n_expert_used as u64)
+        }
+        _ => (0, 1, 0, 0),
+    };
+    // Scratch buffers for non-cached experts plus the speculative pool.
+    let scratch = if native_moe { 4 * k_used * expert_unit } else { 0 };
+    let total = model.weight_bytes() - expert_total;
+    let ram_for_weights = b.ram.usable.saturating_sub(kv_bytes).saturating_sub(scratch);
     let mut ring_bytes = 0;
     let mut reason = None;
     let mut feasible = true;
     if total > ram_for_weights {
         let depth = req.prefetch_depth.unwrap_or(2) as u64;
         // Stream layer groups (never embed/head) until the rest fits.
-        let layer: Vec<usize> = model.groups.iter().filter(|g| g.layer.is_some()).map(|g| g.id).collect();
+        let layer: Vec<usize> = model.groups.iter().filter(|g| g.layer.is_some() && !is_exp(g)).map(|g| g.id).collect();
         let order: Vec<usize> = match req.placement {
             PlacementOrder::Interleaved => spread_order(layer.len()).into_iter().map(|i| layer[i]).collect(),
             PlacementOrder::Contiguous => layer.iter().rev().copied().collect(),
@@ -396,15 +418,31 @@ fn cpu_candidate(model: &ModelDesc, b: &Budgets, bw: &Bandwidths, req: &PlanRequ
             ));
         }
     }
-    let disk_weights: u64 = model.groups.iter().filter(|g| tiers[g.id] == Tier::Disk).map(|g| g.bytes).sum();
-    let ram_weights = total - disk_weights;
+    let dense_disk: u64 = model.groups.iter().filter(|g| tiers[g.id] == Tier::Disk && !is_exp(g)).map(|g| g.bytes).sum();
+    let dense_resident = total - dense_disk;
+    let (mut expert_cache, mut expert_miss, mut cached_bytes) = (None, 0.0, 0u64);
+    if native_moe {
+        let room = ram_for_weights.saturating_sub(dense_resident + ring_bytes);
+        let cap = (room / expert_unit).min(n_experts_total);
+        expert_cache = Some(cap);
+        // Uniform-routing assumption: the hit rate equals the cached fraction.
+        // Skewed routing (real models) does better; measured hit rates replace this.
+        expert_miss = 1.0 - cap as f64 / n_experts_total.max(1) as f64;
+        cached_bytes = if cap >= n_experts_total { expert_total } else { cap * (expert_total / n_experts_total.max(1)) };
+        let exp_tier = if cap >= n_experts_total { Tier::Ram } else { Tier::Disk };
+        for g in model.groups.iter().filter(|g| is_exp(g)) {
+            tiers[g.id] = exp_tier;
+        }
+    }
+    let disk_weights = dense_disk + expert_total.saturating_sub(cached_bytes).min(expert_total);
+    let ram_weights = dense_resident + cached_bytes.min(expert_total);
     let kind = if disk_weights > 0 { StrategyKind::RamNvme } else { StrategyKind::RamOnly };
     let compute_bw = match backend {
         Backend::Native => bw.cpu_native,
         Backend::LlamaCpp => bw.cpu_llamacpp,
     };
     let overlapped = backend == Backend::Native && req.prefetch_depth != Some(0);
-    let estimate = cost::estimate(model, &tiers, kv_bytes, Tier::Ram, n_ctx, bw, compute_bw, overlapped, 0);
+    let estimate = cost::estimate(model, &tiers, kv_bytes, Tier::Ram, n_ctx, bw, compute_bw, overlapped, 0, expert_miss);
     Candidate {
         kind,
         backend,
@@ -416,10 +454,11 @@ fn cpu_candidate(model: &ModelDesc, b: &Budgets, bw: &Bandwidths, req: &PlanRequ
         kv_bytes,
         kv_vram_bytes: 0,
         vram_total: 0,
-        ram_total: ram_weights + kv_bytes + ring_bytes + b.ram.overhead,
+        ram_total: ram_weights + kv_bytes + ring_bytes + scratch + b.ram.overhead,
         n_gpu_layers: if backend == Backend::LlamaCpp { Some(0) } else { None },
         experts_on_cpu: false,
         ring_bytes,
+        expert_cache,
         estimate,
         feasible,
         reason,
@@ -502,7 +541,7 @@ fn llamacpp_gpu(model: &ModelDesc, b: &Budgets, bw: &Bandwidths, req: &PlanReque
         feasible = false;
         reason = Some("CPU-side weights do not fit in RAM".into());
     }
-    let estimate = cost::estimate(model, &tiers, kv_bytes, if ngl == nl { Tier::Vram } else { Tier::Ram }, n_ctx, bw, bw.cpu_llamacpp, false, ngl);
+    let estimate = cost::estimate(model, &tiers, kv_bytes, if ngl == nl { Tier::Vram } else { Tier::Ram }, n_ctx, bw, bw.cpu_llamacpp, false, ngl, 1.0);
     let _ = req;
     Candidate {
         kind,
@@ -519,6 +558,7 @@ fn llamacpp_gpu(model: &ModelDesc, b: &Budgets, bw: &Bandwidths, req: &PlanReque
         n_gpu_layers: Some(if output_on_gpu { nl + 1 } else { ngl }),
         experts_on_cpu,
         ring_bytes: 0,
+        expert_cache: None,
         estimate,
         feasible,
         reason,

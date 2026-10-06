@@ -23,18 +23,36 @@ pub enum IoMode {
 }
 
 /// An owned, aligned, zero-initialized byte buffer.
+///
+/// Large buffers (≥ 1 MiB) on Unix come straight from anonymous `mmap`:
+/// zero pages are provided lazily by the kernel (no memset) and `munmap`
+/// returns the memory to the OS immediately, so RSS tracks what Kestrel
+/// actually holds. (`alloc_zeroed` with page alignment falls back to
+/// `posix_memalign` + memset, which costs milliseconds per expert buffer.)
 pub struct AlignedBuf {
     ptr: *mut u8,
     len: usize,
     align: usize,
+    mmapped: bool,
 }
 
 unsafe impl Send for AlignedBuf {}
 unsafe impl Sync for AlignedBuf {}
 
+const MMAP_THRESHOLD: usize = 1 << 20;
+
 impl AlignedBuf {
     pub fn new(len: usize, align: usize) -> io::Result<Self> {
         let size = len.max(1).div_ceil(align) * align;
+        #[cfg(unix)]
+        if size >= MMAP_THRESHOLD && align <= 4096 {
+            // SAFETY: anonymous private mapping; checked for MAP_FAILED.
+            let p = unsafe { libc::mmap(std::ptr::null_mut(), size, libc::PROT_READ | libc::PROT_WRITE, libc::MAP_PRIVATE | libc::MAP_ANONYMOUS, -1, 0) };
+            if p == libc::MAP_FAILED {
+                return Err(io::Error::last_os_error());
+            }
+            return Ok(Self { ptr: p as *mut u8, len: size, align, mmapped: true });
+        }
         let layout = std::alloc::Layout::from_size_align(size, align)
             .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
         // SAFETY: layout has non-zero size.
@@ -42,7 +60,7 @@ impl AlignedBuf {
         if ptr.is_null() {
             return Err(io::Error::new(io::ErrorKind::OutOfMemory, format!("allocating {size} bytes")));
         }
-        Ok(Self { ptr, len: size, align })
+        Ok(Self { ptr, len: size, align, mmapped: false })
     }
     pub fn len(&self) -> usize {
         self.len
@@ -62,6 +80,12 @@ impl AlignedBuf {
 
 impl Drop for AlignedBuf {
     fn drop(&mut self) {
+        #[cfg(unix)]
+        if self.mmapped {
+            // SAFETY: mapped in `new` with this exact length.
+            unsafe { libc::munmap(self.ptr as *mut libc::c_void, self.len) };
+            return;
+        }
         let layout = std::alloc::Layout::from_size_align(self.len, self.align).unwrap();
         // SAFETY: allocated with the same layout in `new`.
         unsafe { std::alloc::dealloc(self.ptr, layout) }

@@ -127,7 +127,7 @@ impl Rebalancer {
     fn pick(&self, store: &WeightStore, demote: bool) -> Option<usize> {
         let model = store.model();
         let mask = store.resident_mask();
-        let layer_groups: Vec<usize> = model.groups.iter().filter(|g| g.layer.is_some()).map(|g| g.id).collect();
+        let layer_groups: Vec<usize> = model.groups.iter().filter(|g| g.layer.is_some() && !store.is_external(g.id)).map(|g| g.id).collect();
         if layer_groups.is_empty() {
             return None;
         }

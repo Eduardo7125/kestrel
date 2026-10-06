@@ -23,6 +23,8 @@ SHAPES = {
     "7b": dict(layers=32, embd=4096, ff=11008, heads=32, kv_heads=32, vocab=32000),
     "8b": dict(layers=32, embd=4096, ff=14336, heads=32, kv_heads=8, vocab=128256),
     "13b": dict(layers=40, embd=5120, ff=13824, heads=40, kv_heads=40, vocab=32000),
+    # Mixtral-style MoE (llama architecture, ff = expert width)
+    "moe-6b": dict(layers=24, embd=2048, ff=1536, heads=16, kv_heads=4, vocab=32000, experts=32, experts_used=4),
 }
 
 # ggml type id, block elements, block bytes
@@ -43,9 +45,13 @@ def random_blocks(t, n_blocks, scale, rng):
     elif t == "Q4_0":
         raw[:, 0:2] = np.frombuffer(f16(scale / 4.6) * n_blocks, dtype=np.uint8).reshape(n_blocks, 2)
     elif t == "Q4_K":
-        raw[:, 0:2] = np.frombuffer(f16(scale / 140.0) * n_blocks, dtype=np.uint8).reshape(n_blocks, 2)  # d
-        raw[:, 2:4] = np.frombuffer(f16(scale / 140.0) * n_blocks, dtype=np.uint8).reshape(n_blocks, 2)  # dmin
-        raw[:, 4:16] = (raw[:, 4:16] & 0x3F) | 0x20  # 6-bit scales/mins around 32..63
+        # Zero-mean weights: every 6-bit scale and min = 32 (packed layout of
+        # get_scale_min_k4), w = d*32*q - dmin*32 with dmin = 7.5 d, q in 0..15.
+        # Non-zero-mean blocks bias every row and freeze MoE routing.
+        d = scale / (32 * 4.61)
+        raw[:, 0:2] = np.frombuffer(f16(d) * n_blocks, dtype=np.uint8).reshape(n_blocks, 2)
+        raw[:, 2:4] = np.frombuffer(f16(7.5 * d) * n_blocks, dtype=np.uint8).reshape(n_blocks, 2)
+        raw[:, 4:16] = np.array([160] * 8 + [0] * 4, dtype=np.uint8)
     elif t == "Q6_K":
         raw[:, 192:208] = (raw[:, 192:208] % 32 + 16).astype(np.uint8)  # int8 scales 16..47
         raw[:, 208:210] = np.frombuffer(f16(scale / 600.0) * n_blocks, dtype=np.uint8).reshape(n_blocks, 2)
@@ -92,6 +98,8 @@ def main():
     for k in ["layers", "embd", "ff", "heads", "kv_heads", "vocab"]:
         ap.add_argument("--" + k.replace("_", "-"), type=int)
     ap.add_argument("--type", default="Q4_K", choices=["Q4_0", "Q8_0", "Q4_K", "Q6_K", "F16"])
+    ap.add_argument("--experts", type=int, help="routed experts per layer (MoE)")
+    ap.add_argument("--experts-used", type=int, help="experts selected per token")
     ap.add_argument("--seed", type=int, default=0)
     a = ap.parse_args()
     cfg = dict(SHAPES[a.shape]) if a.shape else {}
@@ -100,6 +108,8 @@ def main():
         if v:
             cfg[k] = v
     L, E, F, H, KV, V = (cfg[k] for k in ["layers", "embd", "ff", "heads", "kv_heads", "vocab"])
+    NE = a.experts or cfg.get("experts", 0)
+    NU = a.experts_used or cfg.get("experts_used", 2 if NE else 0)
     hd = E // H
     rng = np.random.default_rng(a.seed)
     wt = a.type
@@ -129,13 +139,24 @@ def main():
             (p + "attn_v.weight", [E, KV * hd], wt, 1.0 / np.sqrt(E)),
             (p + "attn_output.weight", [H * hd, E], wt, 1.0 / np.sqrt(E)),
             (p + "ffn_norm.weight", [E], "F32", None),
-            (p + "ffn_gate.weight", [E, F], wt, 1.0 / np.sqrt(E)),
-            (p + "ffn_up.weight", [E, F], wt, 1.0 / np.sqrt(E)),
-            (p + "ffn_down.weight", [F, E], wt, 1.0 / np.sqrt(F)),
         ]
+        if NE:
+            tensors += [
+                (p + "ffn_gate_inp.weight", [E, NE], "F32", 4.0 / np.sqrt(E)),
+                (p + "ffn_gate_exps.weight", [E, F, NE], wt, 1.0 / np.sqrt(E)),
+                (p + "ffn_up_exps.weight", [E, F, NE], wt, 1.0 / np.sqrt(E)),
+                (p + "ffn_down_exps.weight", [F, E, NE], wt, 1.0 / np.sqrt(F)),
+            ]
+        else:
+            tensors += [
+                (p + "ffn_gate.weight", [E, F], wt, 1.0 / np.sqrt(E)),
+                (p + "ffn_up.weight", [E, F], wt, 1.0 / np.sqrt(E)),
+                (p + "ffn_down.weight", [F, E], wt, 1.0 / np.sqrt(F)),
+            ]
     tensors += [("output_norm.weight", [E], "F32", None), ("output.weight", [E, V], head_t, 1.0 / np.sqrt(E))]
 
-    hdr = bytearray(b"GGUF") + struct.pack("<IQQ", 3, len(tensors), 15)
+    n_kv = 15 + (2 if NE else 0)
+    hdr = bytearray(b"GGUF") + struct.pack("<IQQ", 3, len(tensors), n_kv)
     put_kv(hdr, "general.architecture", 8, "llama")
     put_kv(hdr, "general.name", 8, f"synthetic-{a.shape or 'custom'}-{wt}")
     put_kv(hdr, "llama.block_count", 4, L)
@@ -151,6 +172,9 @@ def main():
     put_kv(hdr, "tokenizer.ggml.tokens", 9, (8, tokens))
     put_kv(hdr, "tokenizer.ggml.token_type", 9, (5, types))
     put_kv(hdr, "tokenizer.ggml.merges", 9, (8, []))
+    if NE:
+        put_kv(hdr, "llama.expert_count", 4, NE)
+        put_kv(hdr, "llama.expert_used_count", 4, NU)
     # (15 KV entries declared; pad count with eos/bos below)
     assert hdr.count(b"tokenizer.ggml.merges") == 1
     offsets, off = [], 0
@@ -167,7 +191,8 @@ def main():
     pad = (-len(hdr)) % ALIGN
     hdr += b"\0" * pad
     total = len(hdr) + off
-    print(f"writing {a.out}: {L} layers, embd {E}, ff {F}, vocab {V}, {wt} → {total / 1e9:.2f} GB")
+    moe = f", {NE} experts (top {NU})" if NE else ""
+    print(f"writing {a.out}: {L} layers, embd {E}, ff {F}, vocab {V}{moe}, {wt} → {total / 1e9:.2f} GB")
     with open(a.out, "wb") as f:
         f.write(hdr)
         written = 0
@@ -175,7 +200,10 @@ def main():
             assert written == o, (name, written, o)
             n = int(np.prod(dims))
             if t == "F32":
-                data = (1.0 + 0.05 * rng.standard_normal(n)).astype(np.float32).tobytes()
+                if scale is None:
+                    data = (1.0 + 0.05 * rng.standard_normal(n)).astype(np.float32).tobytes()
+                else:
+                    data = (scale * rng.standard_normal(n)).astype(np.float32).tobytes()
             else:
                 be = TYPES[t][1]
                 chunks = []

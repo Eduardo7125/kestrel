@@ -107,6 +107,12 @@ pub struct MoeInfo {
     pub bytes_per_expert: u64,
     /// Number of layers with routed experts.
     pub moe_layers: u32,
+    /// Intermediate size of one routed expert.
+    pub n_ff_exp: u32,
+    /// Renormalize the selected experts' weights to sum to 1.
+    pub norm_topk: bool,
+    /// Multiply expert weights by this (0 or 1 = no scaling).
+    pub weights_scale: f32,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -169,12 +175,21 @@ impl ModelDesc {
         let moe = if n_expert > 1 {
             let exp_groups: Vec<&TensorGroup> = groups.iter().filter(|gr| gr.kind == GroupKind::Experts).collect();
             let bytes_per_expert = exp_groups.first().map(|gr| gr.bytes / n_expert as u64).unwrap_or(0);
+            let n_ff_exp = g.arch_u64("expert_feed_forward_length").map(|v| v as u32).unwrap_or_else(|| {
+                // Fall back to the gate_exps tensor shape [n_embd, n_ff_exp, n_expert].
+                g.tensors.iter().find(|t| t.name.ends_with("ffn_gate_exps.weight")).and_then(|t| t.dims.get(1).copied()).unwrap_or(0) as u32
+            });
+            // qwen2moe does not renormalize; qwen3moe and llama-style (Mixtral) do.
+            let norm_default = arch != "qwen2moe";
             Some(MoeInfo {
                 n_expert,
                 n_expert_used: n_expert_used.max(1),
                 n_expert_shared: g.arch_u64("expert_shared_count").unwrap_or(0) as u32,
                 bytes_per_expert,
                 moe_layers: exp_groups.len() as u32,
+                n_ff_exp,
+                norm_topk: g.get(&format!("{arch}.expert_weights_norm")).and_then(|v| v.as_bool()).unwrap_or(norm_default),
+                weights_scale: g.arch_f64("expert_weights_scale").unwrap_or(0.0) as f32,
             })
         } else {
             None

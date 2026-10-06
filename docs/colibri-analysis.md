@@ -438,10 +438,10 @@ Every Colibrì cell is backed by the evidence column.
 |---|---|---|---|---|
 | Small models (≤7B) | **Partial.** OLMoE 7B (MoE) only | README roster; `c/olmoe.c` | Yes | Yes (any llama-family GGUF) |
 | Medium models (8-70B) | **Partial.** Qwen3.6 35B-A3B (MoE) only | README; `c/qwen36.c` | Yes | Dense llama/qwen2/qwen3/mistral GGUF |
-| Large models (100B+) | **Yes** (MoE) | GLM, DeepSeek, Qwen3.8 | Yes | Planner yes; executor limited by kernels |
-| Huge MoE (400B-3T) | **Yes** | GLM-5.2 744B, Inkling 975B, Kimi K3 2.8T | Yes | Expert-aware planning; MoE execution is phase 8 |
+| Large models (100B+) | **Yes** (MoE) | GLM, DeepSeek, Qwen3.8 | Yes | Planner yes; native executor runs qwen2moe/qwen3moe/Mixtral-style MoE GGUFs with an expert cache; not yet run at 100B+ scale |
+| Huge MoE (400B-3T) | **Yes** | GLM-5.2 744B, Inkling 975B, Kimi K3 2.8T | Yes | Same expert-streaming mechanism, but the architectures (DeepSeek MLA, GLM DSA, …) are not implemented natively |
 | Dense models | **No** | No dense engine in `c/`; streaming code is expert-keyed (`expert_load_impl`) | Yes | **Yes, the primary MVP target** |
-| MoE | **Yes** | All nine families | Yes | Detection and planning yes; native execution later |
+| MoE | **Yes** | All nine families | Yes | **Yes**: expert-granular cache (LFRU + leases), batch union, router lookahead with an accuracy-gated speculative pool, usage-history warm start |
 | VRAM tiering | **Yes** (experts + dense via `CUDA_DENSE`) | `docs/cuda.md` | Yes | Planned and delegated to the llama.cpp backend; no native CUDA in MVP |
 | RAM tiering | **Yes** | `ecache`, pin | Yes | Yes |
 | NVMe tiering | **Yes** (experts; dense only via `TRUNK_RESIDENT_LAYERS` mmap) | `c/st.h`, `c/colibri.c:2132` | Yes | Yes (layer-granular streaming of dense weights) |

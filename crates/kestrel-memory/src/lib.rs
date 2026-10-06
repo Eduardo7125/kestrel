@@ -5,6 +5,7 @@
 //!
 //! Nothing here depends on an inference backend.
 
+pub mod expert;
 pub mod guard;
 pub mod io;
 pub mod ledger;
@@ -12,6 +13,7 @@ pub mod lfru;
 pub mod metrics;
 pub mod store;
 
+pub use expert::{ExpertLease, ExpertMetrics, ExpertPolicy, ExpertStore, UsageFile};
 pub use guard::{MemoryGuard, Pressure};
 pub use ledger::{BudgetError, Ledger, Reservation, Tier, TierUsage};
 pub use lfru::LfruCache;

@@ -126,6 +126,59 @@ The same pattern holds at 7B:
   is ~8× slower than llama.cpp; the native prefill path is the weakest part
   of the executor.
 
+## 4. Mixture of experts: expert-granular streaming (7.6B MoE)
+
+Model: synthetic Mixtral-style MoE (`tools/make_synthetic.py --shape moe-6b`):
+24 layers, d=2048, 32 experts per layer (top-4), expert width 1536, Q4_K.
+That is 4.32 GB of weights, 4.08 GB of them in 768 routed experts of 5.3 MB
+each. The streaming arms get a 1.64 GB RAM budget: the dense part is
+resident, the expert cache holds ~165 experts (21%), and the rest stream from
+disk on demand. 32 tokens are decoded with **sampling at temperature 1, fixed
+seed**. Greedy decoding of random weights repeats one token and freezes the
+routing, which would flatter any cache. With sampling, routing is close to
+**uniform**, the worst case for caching. Real models have skewed, partly
+predictable routing (Colibrì measures 71.6% one-layer-ahead recall on
+GLM-5.2), so their hit rates should be higher than these.
+
+Raw data: `results/syn-moe-q4k-arms.json` (all arms, 3 runs) and
+`results/syn-moe-q4k-lookahead.json` (lookahead arms, 5 runs).
+
+| Arm | Decode tok/s | Peak RSS | Expert hit | Expert bytes read / token | Stall / token |
+|---|---|---|---|---|---|
+| `resident` (all 768 experts preloaded) | **6.67** [6.60-6.71] | 4.38 GB | 100% | 0 | 0 |
+| `kestrel`: LFRU cache + lookahead (5 runs) | **4.28** [3.49-4.30] | **1.40 GB** | 73% | 393 MB | 0.084 s |
+| `no-lookahead`: LFRU cache only (5 runs) | 3.84 [3.57-4.16] | 1.32 GB | 47% | 300 MB | 0.121 s |
+| `lru-experts`: LRU cache + lookahead (3 runs) | 2.93 [2.91-2.96] | 1.31 GB | 44% | 568 MB | 0.167 s |
+| `llamacpp-cpu` (mmap, page cache unconstrained) | 20.32 [17.77-21.16] | not measured | — | — | — |
+
+All Kestrel arms produce **identical output**.
+
+* **32% of the RAM for 64% of the speed.** With 21% of the experts cached,
+  the model runs in 1.40 GB instead of 4.38 GB at 4.28 vs 6.67 tok/s.
+* **Router lookahead: +11% decode, -30% stall.** Lookahead recall is 76% on
+  these weights. Predictions the full cache will not admit load into a small
+  speculative pool, which raises the expert hit rate from 47% to 73%. It also
+  reads 31% more bytes, because a quarter of the guesses are wrong. Across two
+  sessions the gain ranged from -5% to +11%, which is about the size of the
+  run-to-run spread. Treat it as a modest, host-dependent win, as Colibrì
+  reports for PILOT. The speculative pool pauses itself when fewer than half
+  of its loads are used.
+* **LFRU vs LRU: +31% decode** (3.84 vs 2.93 tok/s, LFRU without lookahead
+  against LRU with lookahead, which favours LRU). Even with uniform routing,
+  LRU admits every miss and every guess and churns the cache: 568 vs 300 MB
+  read per token for a lower hit rate. LFRU's hysteresis keeps one-off experts
+  in scratch buffers.
+* **Negative result: kernel speed.** llama.cpp decodes this model 3× faster
+  fully resident (20.3 vs 6.7 tok/s). It also keeps the whole 4.3 GB file in
+  the page cache, outside any budget, which this 16 GB machine allowed.
+* **Two bugs found by the harness and fixed before these numbers:**
+  1. Expert outputs were summed in residency order, so different cache states
+     produced ulp-level logit differences and different sampled tokens.
+     Outputs are now summed in expert-id order (bit-identical across arms).
+  2. `alloc_zeroed` with page alignment memset every 5.3 MB expert buffer
+     under the store lock: 50 ms per expert and a 17 s time-to-first-token.
+     Large buffers now come from anonymous `mmap`: 100 µs per batch request.
+
 ## Research questions: status after these runs
 
 | RQ | Status |
@@ -136,8 +189,9 @@ The same pattern holds at 7B:
 | 8. How does NVMe latency affect generation? | Indirectly: late prefetches explain the remaining stall. Needs real NVMe and the I/O-worker sweep |
 | 12. When does streaming become counter-productive? | On this disk, beyond ~75% streamed, decode falls below a fifth of resident speed. The planner reports the disk bound in every plan that streams |
 | 2, 4, 5, 9, 10 | Need a GPU host |
+| 3 (MoE). Does prefetching help for experts? | Router lookahead: +11% decode, -30% stall, 31% more bytes read; host-dependent |
 | 7 | Migration cost: rebalancer implemented; not yet measured |
-| 11 | MoE predictability: phase 8 |
+| 11. How predictable are MoE expert accesses? | One-layer-ahead router lookahead recalls 76% of experts on synthetic weights (uniform routing). Real-model routing traces are still needed |
 
 ## Minimum report for community datapoints
 

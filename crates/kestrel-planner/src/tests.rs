@@ -184,7 +184,7 @@ fn moe_puts_experts_on_cpu() {
         extra.push(TensorGroup { id, kind: GroupKind::Experts, layer: Some(l), tensors: vec![], extents: vec![], bytes: bytes_per_expert * 128, touch_per_token: 8.0 / 128.0 });
     }
     m.groups.extend(extra);
-    m.moe = Some(MoeInfo { n_expert: 128, n_expert_used: 8, n_expert_shared: 0, bytes_per_expert, moe_layers: 48 });
+    m.moe = Some(MoeInfo { n_expert: 128, n_expert_used: 8, n_expert_shared: 0, bytes_per_expert, moe_layers: 48, n_ff_exp: 768, norm_topk: true, weights_scale: 0.0 });
     let h = hw(34 * GB, 28 * GB, Some((8 * GB, 7_600_000_000)));
     let p = plan(&m, &h, &PlanRequest { llamacpp_available: true, native_support: Err("moe".into()), ..Default::default() }).unwrap();
     assert!(p.chosen.experts_on_cpu, "{}", p.text());
@@ -203,4 +203,39 @@ fn spread_order_is_a_spread_permutation() {
     }
     let o = spread_order(8);
     assert_eq!(&o[..4], &[0, 4, 2, 6]);
+}
+
+#[test]
+fn native_moe_sizes_an_expert_cache() {
+    let mut m = dense(24, 2048, 1536, 32000, 4, 4.85);
+    // Replace dense FFNs with 32 routed experts per layer, top-4.
+    let bpe = (3.0 * 2048.0 * 1536.0 * 4.85 / 8.0) as u64;
+    for g in m.groups.iter_mut().filter(|g| g.kind == GroupKind::Ffn) {
+        g.bytes = 64 << 10; // router + norm
+    }
+    let mut extra = Vec::new();
+    for l in 0..24 {
+        let id = m.groups.len() + extra.len();
+        extra.push(TensorGroup { id, kind: GroupKind::Experts, layer: Some(l), tensors: vec![], extents: vec![], bytes: bpe * 32, touch_per_token: 4.0 / 32.0 });
+    }
+    m.groups.extend(extra);
+    m.moe = Some(MoeInfo { n_expert: 32, n_expert_used: 4, n_expert_shared: 0, bytes_per_expert: bpe, moe_layers: 24, n_ff_exp: 1536, norm_topk: true, weights_scale: 0.0 });
+    let experts_total = bpe * 32 * 24;
+
+    // Plenty of RAM: every expert cached, nothing streamed.
+    let p = plan(&m, &hw(32 * GB, 28 * GB, None), &PlanRequest::default()).unwrap();
+    assert_eq!(p.chosen.backend, Backend::Native);
+    assert_eq!(p.chosen.expert_cache, Some(32 * 24));
+    assert_eq!(p.chosen.disk_weights, 0);
+    assert!(p.store.external_experts);
+
+    // Tight RAM: dense part resident, a partial expert cache, the rest on disk.
+    let p = plan(&m, &hw(16 * GB, 2_500_000_000 + (1536 << 20), None), &PlanRequest::default()).unwrap();
+    let cap = p.chosen.expert_cache.unwrap();
+    assert!(cap > 8 && cap < 32 * 24, "cap {cap}\n{}", p.text());
+    assert!(p.chosen.disk_weights > 0 && p.chosen.disk_weights < experts_total);
+    // Disk reads per token reflect cache misses, not all touched expert bytes.
+    let touched = 24.0 * 4.0 * bpe as f64;
+    assert!(p.chosen.estimate.disk_bytes_per_token < touched, "{}", p.chosen.estimate.disk_bytes_per_token);
+    assert!(p.text().contains("expert cache holds"));
 }

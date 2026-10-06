@@ -13,7 +13,7 @@ use kestrel_engine::{ChatMessage, Engine, GenParams, GenStats};
 use kestrel_gguf::GgufFile;
 use kestrel_hw::fmt_bytes;
 use kestrel_memory::guard::{MemSample, RebalanceAction, Rebalancer};
-use kestrel_memory::{Ledger, MemoryGuard, Tier, WeightStore};
+use kestrel_memory::{ExpertPolicy, ExpertStore, Ledger, MemoryGuard, Tier, UsageFile, WeightStore};
 use kestrel_model::ModelDesc;
 use kestrel_planner::ExecutionPlan;
 use serde::Serialize;
@@ -51,16 +51,21 @@ pub struct NativeSession {
     pub rebalance_interval: usize,
     pub totals: SessionTotals,
     name: String,
+    usage_history: bool,
 }
 
 pub struct NativeOptions {
     /// Adapt placement at runtime (promote/demote between RAM and NVMe).
     pub adaptive: bool,
+    /// Expert-cache policy for MoE models.
+    pub expert_policy: ExpertPolicy,
+    /// Load and persist expert usage next to the model (warm starts).
+    pub usage_history: bool,
 }
 
 impl Default for NativeOptions {
     fn default() -> Self {
-        NativeOptions { adaptive: true }
+        NativeOptions { adaptive: true, expert_policy: ExpertPolicy::Lfru, usage_history: true }
     }
 }
 
@@ -73,7 +78,32 @@ impl NativeSession {
         let order: Vec<usize> = (0..model.groups.len()).collect();
         let store = WeightStore::new(model.clone(), &plan.resident_mask(), order, plan.store.clone(), ledger.clone())
             .with_context(|| format!("allocating weights under a {} RAM budget", fmt_bytes(b.ram.usable)))?;
-        let engine = Engine::new(gguf, model.clone(), store.clone(), plan.n_ctx as usize, plan.threads, &ledger)?;
+        let experts = match (plan.chosen.expert_cache, &model.moe) {
+            (Some(cap), Some(moe)) => {
+                let mut es = ExpertStore::new(
+                    model.clone(),
+                    cap as usize,
+                    2 * moe.n_expert_used as usize,
+                    plan.store.io_mode,
+                    plan.store.io_workers,
+                    opts.expert_policy,
+                    ledger.clone(),
+                )?;
+                if let Some(v) = std::env::var("KESTREL_SPEC_MIN_ACCURACY").ok().and_then(|v| v.parse().ok()) {
+                    es.spec_min_accuracy = v;
+                }
+                if es.capacity >= es.n_experts_total() {
+                    // Everything fits: experts are resident, load them now.
+                    es.preload_all()?;
+                } else if let Some(hist) = UsageFile::load(&model).filter(|_| opts.usage_history) {
+                    let n = es.warm_start(&hist)?;
+                    eprintln!("kestrel: warm start: {n} experts preloaded from usage history");
+                }
+                Some(Arc::new(es))
+            }
+            _ => None,
+        };
+        let engine = Engine::new(gguf, model.clone(), store.clone(), experts.clone(), plan.n_ctx as usize, plan.threads, &ledger)?;
         let rebalancer = opts.adaptive.then(|| {
             let mut r = Rebalancer::new(MemoryGuard {
                 rss_limit: b.ram.usable + b.ram.overhead,
@@ -96,6 +126,7 @@ impl NativeSession {
             rebalancer,
             rebalance_interval: 16,
             totals: SessionTotals::default(),
+            usage_history: opts.usage_history,
         })
     }
 
@@ -140,6 +171,10 @@ impl InferenceSession for NativeSession {
         self.rebalancer = rebal;
         self.totals.rebalance.extend(actions);
         let stats = res?;
+        if let (true, Some(ex)) = (self.usage_history, &self.engine.tf.experts) {
+            let _ = UsageFile::save(&self.engine.tf.model, ex.usage());
+            ex.decay();
+        }
         let t = &mut self.totals;
         t.requests += 1;
         t.prompt_tokens += stats.prompt_tokens as u64;
@@ -161,6 +196,7 @@ impl InferenceSession for NativeSession {
             "rss_bytes": kestrel_hw::process_rss(),
             "ram_budget": ram,
             "store": self.store.metrics(),
+            "experts": self.engine.tf.experts.as_ref().map(|e| e.metrics()),
             "streamed_bytes_per_token": self.store.streamed_bytes_per_pass(),
             "io_mode": self.store.io_mode(),
             "totals": self.totals,

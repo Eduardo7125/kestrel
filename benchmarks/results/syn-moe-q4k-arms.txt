@@ -1,0 +1,36 @@
+MoE: 768 experts of 5.3 MB each; cache for ~25% of them
+model synthetic-moe-6b-Q4_K · 4.32 GB weights (4.23 GB in layers) · streaming arms: RAM budget 1.64 GB (~75% of layer bytes streamed)
+arms: resident, kestrel, lookahead-always, no-lookahead, lru-experts, llamacpp-cpu  ·  runs: 3 (interleaved)  ·  32 tokens
+  run 1 resident      decode    6.60 tok/s · prefill    19.4 tok/s · peak RSS   4.38 GB · hit  100% · stall   0.00s
+  run 1 kestrel       decode    3.29 tok/s · prefill    10.3 tok/s · peak RSS   1.40 GB · hit   49% · stall   5.40s
+  run 1 lookahead-always decode    4.39 tok/s · prefill    10.0 tok/s · peak RSS   1.39 GB · hit   73% · stall   2.95s
+  run 1 no-lookahead  decode    3.80 tok/s · prefill    12.0 tok/s · peak RSS   1.32 GB · hit   47% · stall   3.85s
+  run 1 lru-experts   decode    2.93 tok/s · prefill    15.4 tok/s · peak RSS   1.31 GB · hit   44% · stall   5.33s
+  run 1 llamacpp-cpu  decode   21.16 tok/s · prefill    54.6 tok/s · peak RSS       0 B · hit    0% · stall   0.00s
+  run 2 resident      decode    6.67 tok/s · prefill    22.8 tok/s · peak RSS   4.38 GB · hit  100% · stall   0.00s
+  run 2 kestrel       decode    3.32 tok/s · prefill    11.4 tok/s · peak RSS   1.40 GB · hit   49% · stall   5.42s
+  run 2 lookahead-always decode    4.20 tok/s · prefill    11.0 tok/s · peak RSS   1.40 GB · hit   73% · stall   3.08s
+  run 2 no-lookahead  decode    3.97 tok/s · prefill    12.6 tok/s · peak RSS   1.32 GB · hit   47% · stall   3.73s
+  run 2 lru-experts   decode    2.96 tok/s · prefill    15.3 tok/s · peak RSS   1.31 GB · hit   44% · stall   5.18s
+  run 2 llamacpp-cpu  decode   20.32 tok/s · prefill    48.8 tok/s · peak RSS       0 B · hit    0% · stall   0.00s
+  run 3 resident      decode    6.71 tok/s · prefill    21.1 tok/s · peak RSS   4.38 GB · hit  100% · stall   0.00s
+  run 3 kestrel       decode    3.27 tok/s · prefill    10.5 tok/s · peak RSS   1.40 GB · hit   49% · stall   5.59s
+  run 3 lookahead-always decode    4.26 tok/s · prefill    10.7 tok/s · peak RSS   1.40 GB · hit   73% · stall   3.10s
+  run 3 no-lookahead  decode    4.16 tok/s · prefill    13.5 tok/s · peak RSS   1.32 GB · hit   47% · stall   3.47s
+  run 3 lru-experts   decode    2.91 tok/s · prefill    15.9 tok/s · peak RSS   1.31 GB · hit   44% · stall   5.70s
+  run 3 llamacpp-cpu  decode   17.77 tok/s · prefill    45.8 tok/s · peak RSS       0 B · hit    0% · stall   0.00s
+
+ARM            decode tok/s  prefill t/s   peak RSS  streamed/t     hit stall/tok    disk BW  prefetch  output
+resident        6.67 [6.60-6.71]         21.1    4.38 GB         0 B    100%    0.000s      0 B/s        0%  identical
+               experts: hit 100% · read 0 B/token · lookahead recall 76%
+kestrel         3.29 [3.27-3.32]         10.5    1.40 GB         0 B     49%    0.169s      0 B/s        0%  identical
+               experts: hit 49% · read 306.6 MB/token · lookahead recall 76%
+lookahead-always  4.26 [4.20-4.39]         10.7    1.40 GB         0 B     73%    0.096s      0 B/s        0%  identical
+               experts: hit 73% · read 391.9 MB/token · lookahead recall 76%
+no-lookahead    3.97 [3.80-4.16]         12.6    1.32 GB         0 B     47%    0.117s      0 B/s        0%  identical
+               experts: hit 47% · read 299.0 MB/token · lookahead recall off
+lru-experts     2.93 [2.91-2.96]         15.4    1.31 GB         0 B     44%    0.167s      0 B/s        0%  identical
+               experts: hit 44% · read 567.5 MB/token · lookahead recall 76%
+llamacpp-cpu   20.32 [17.77-21.16]         48.8        0 B         0 B      0%    0.000s      0 B/s        0%  n/a
+               note: llama.cpp (mmap, own kernels, own placement); RSS not measured
+raw results → benchmarks/results/syn-moe-q4k-arms.json

@@ -114,16 +114,23 @@ t_token ≈ Σ compute(all layers) + max(0, Σ load(S) − Σ compute(overlappab
 Interleaving maximizes the overlappable compute for each load. Benchmark arm:
 `--placement contiguous|interleaved`.
 
-### 3.4 Predictive prefetch (MoE, Phase 8)
+### 3.4 Predictive prefetch (MoE, Phase 8): implemented
 
-* **Usage-history prior:** experts ranked by persisted counts are pinned first
-  (the static placement above).
-* **Router lookahead:** after layer `i`'s attention, run layer `i+1`'s router
-  on the current hidden state, as Colibrì's PILOT does, and prefetch the top-k′
-  predicted experts that are not resident. Measured metrics: recall at k,
-  wasted bytes, late fraction. This policy is only enabled when measured
-  recall × hit benefit exceeds the wasted-bandwidth cost, because Colibrì
-  documents net losses on disk-saturated hosts.
+* **Usage-history prior:** per-(layer, expert) counts are saved after every
+  request to `<model>.kestrel-usage.json`, keyed by the model fingerprint. At
+  the next start the hottest experts are preloaded up to cache capacity, and
+  their heat is seeded (warm start).
+* **Router lookahead** (Colibrì's PILOT): after layer `l`'s attention, layer
+  `l+1`'s `ffn_norm` and router are applied to the current residual stream,
+  and the predicted top-k experts are prefetched (decode only, `S ≤ 4`).
+  Predictions the cache would admit load into the cache. The others load into
+  a small **speculative pool** that never displaces a cached expert, which is
+  what makes lookahead useful when the cache is full. Recall is measured on
+  every MoE layer (`lookahead_recall`). `KESTREL_LOOKAHEAD=0` disables it.
+* **Batch union:** a layer's routed experts are requested together
+  (`ExpertStore::request`), so all misses load in parallel. Cached experts are
+  computed first while the missing ones arrive. Each expert runs once for all
+  rows routed to it.
 
 ## 4. Caching (Phase 7)
 
@@ -132,24 +139,26 @@ Interleaving maximizes the overlappable compute for each load. Benchmark arm:
 There is no LRU for dense layers (see §1). The "layer cache" is the resident
 set plus the ring, sized by the planner and adjusted by the Rebalancer.
 
-### 4.2 Expert cache (LFRU with leases)
+### 4.2 Expert cache (LFRU with leases): implemented in `kestrel-memory/src/expert.rs`
 
-Adapted from Colibrì `c/tier.h`:
+The unit is one routed expert: its slices of the stacked `ffn_{gate,up,down}_exps`
+tensors, read as three extents into one aligned buffer.
 
 ```text
 score(e) = (heat(e) << 8) | recency(e)          recency = max(0, 255 − age)
-victim   = argmin score among unleased slots
-promote x over victim v only if  heat(x) > heat(v) + heat(v)/4 + 4   (hysteresis)
-heat decays by halving every `decay_period` tokens
+victim   = argmin score among unleased, fully loaded entries
+admit x over victim v only if  score(x) > score(v) + score(v)/4 + 4·256   (hysteresis)
+heat decays by halving after every request
 ```
 
-* Leases: `ExpertCache::get(layer, e) -> Option<ExpertLease>`. The lease pins
-  the slot, so eviction skips it.
-* Budget: a fixed number of slots per layer, or a global byte budget. Both are
-  derived from the RAM budget.
-* Persistence: per-(layer, expert) counts are saved to
-  `<model>.kestrel-usage.json` at shutdown and used as the prior at the next
-  start.
+* Capacity (in experts) comes from the plan: RAM left after the dense part,
+  the KV cache, scratch and the speculative pool.
+* Leases are `Arc`s. An entry is evictable only when its `Arc` is unshared and
+  its load has completed.
+* Experts that are not admitted are served through scratch buffers. A
+  one-off expert never evicts a hot one.
+* When the whole expert set fits, it is preloaded at startup (resident).
+* `--expert-policy lru` is the ablation.
 
 ### 4.3 KV cache
 

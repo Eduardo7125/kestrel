@@ -46,6 +46,7 @@ pub struct GenStats {
     pub decode_tok_s: f64,
     pub stop_reason: String,
     pub memory: Option<MetricsSnapshot>,
+    pub experts: Option<kestrel_memory::ExpertMetrics>,
     /// Generated token ids (for output-equivalence checks).
     #[serde(skip)]
     pub tokens: Vec<u32>,
@@ -67,11 +68,11 @@ impl Default for GenParams {
 }
 
 impl Engine {
-    pub fn new(gguf: &GgufFile, model: Arc<ModelDesc>, store: WeightStore, n_ctx: usize, threads: usize, ledger: &Arc<Ledger>) -> Result<Self, EngineError> {
+    pub fn new(gguf: &GgufFile, model: Arc<ModelDesc>, store: WeightStore, experts: Option<Arc<kestrel_memory::ExpertStore>>, n_ctx: usize, threads: usize, ledger: &Arc<Ledger>) -> Result<Self, EngineError> {
         let tokenizer = Tokenizer::from_gguf(gguf).map_err(|e| EngineError::Unsupported(e.to_string()))?;
         let tok_text = |id: Option<u32>| id.map(|i| tokenizer.token_text(i).to_string()).unwrap_or_default();
         let chat = ChatTemplate::new(gguf.get_str("tokenizer.chat_template"), &tok_text(tokenizer.bos), &tok_text(tokenizer.eos));
-        let tf = Transformer::new(model, store, n_ctx, threads, ledger)?;
+        let tf = Transformer::new(model, store, experts, n_ctx, threads, ledger)?;
         Ok(Engine { tf, tokenizer, chat })
     }
 
@@ -97,6 +98,7 @@ impl Engine {
     pub fn generate(&mut self, prompt: &[u32], params: &GenParams, mut on_text: impl FnMut(&str) -> bool) -> Result<GenStats, EngineError> {
         let mut stats = GenStats { prompt_tokens: prompt.len(), ..Default::default() };
         let mem0 = self.tf.store.metrics();
+        let ex0 = self.tf.experts.as_ref().map(|e| e.metrics());
         let t0 = Instant::now();
 
         // Reuse the longest cached prefix, but always evaluate at least one
@@ -157,6 +159,9 @@ impl Engine {
             stats.decode_tok_s = (stats.generated - 1) as f64 / stats.decode_s;
         }
         stats.memory = Some(self.tf.store.metrics().delta(&mem0));
+        if let (Some(ex), Some(e0)) = (&self.tf.experts, ex0) {
+            stats.experts = Some(ex.metrics().delta(&e0));
+        }
         Ok(stats)
     }
 }

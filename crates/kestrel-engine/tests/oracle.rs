@@ -10,7 +10,7 @@
 use kestrel_engine::Engine;
 use kestrel_gguf::GgufFile;
 use kestrel_hw::fileio::IoMode;
-use kestrel_memory::{Ledger, RingPolicy, StoreConfig, WeightStore};
+use kestrel_memory::{ExpertPolicy, ExpertStore, Ledger, RingPolicy, StoreConfig, WeightStore};
 use kestrel_model::ModelDesc;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -41,9 +41,17 @@ fn engine(path: &Path, streamed: bool) -> Engine {
     let n = m.groups.len();
     let ledger = Ledger::new(0, 1 << 34, 0);
     let resident: Vec<bool> = (0..n).map(|_| !streamed).collect();
-    let cfg = StoreConfig { io_mode: IoMode::Direct, prefetch_depth: 2, ring_slots: 3, io_workers: 4, policy: RingPolicy::Belady, drop_page_cache: true };
+    let cfg = StoreConfig { io_mode: IoMode::Direct, prefetch_depth: 2, ring_slots: 3, io_workers: 4, policy: RingPolicy::Belady, drop_page_cache: true, external_experts: false };
+    let mut cfg = cfg;
+    cfg.external_experts = m.moe.is_some();
     let store = WeightStore::new(m.clone(), &resident, (0..n).collect(), cfg, ledger.clone()).unwrap();
-    Engine::new(&g, m, store, 256, 4, &ledger).unwrap()
+    // MoE: everything cached when resident; a 2-expert cache (most experts
+    // streamed through scratch buffers) when streamed.
+    let experts = m.moe.as_ref().map(|moe| {
+        let cap = if streamed { 2 } else { (moe.n_expert * moe.moe_layers) as usize };
+        Arc::new(ExpertStore::new(m.clone(), cap, 2 * moe.n_expert_used as usize, IoMode::Direct, 4, ExpertPolicy::Lfru, ledger.clone()).unwrap())
+    });
+    Engine::new(&g, m, store, experts, 256, 4, &ledger).unwrap()
 }
 
 fn compare(path: &Path, bin: &Path, prompt: &str, tol: f32) {
@@ -89,6 +97,10 @@ fn compare_mode(path: &Path, reference: &Path, bin: &Path, prompt: &str, tol: f3
     assert_eq!(ls, logits, "streamed execution must match resident bit for bit");
     let m = s.tf.store.metrics();
     assert!(m.stream_bytes > 0 && m.resident_hits == 0, "{m:?}");
+    if let Some(ex) = &s.tf.experts {
+        let em = ex.metrics();
+        assert!(em.scratch_loads > 0 && em.cached <= 2, "{em:?}");
+    }
 }
 
 #[test]
@@ -128,4 +140,18 @@ fn chat_prompt_special_tokens() {
     let p = dir.join("qwen3-f32.gguf");
     let prompt = "<|im_start|>user\nCiao, come stai? 🙂<|im_end|>\n<|im_start|>assistant\n";
     compare(&p, &bin, prompt, 2e-3);
+}
+
+#[test]
+fn moe_matches_llama_cpp() {
+    let Some((dir, bin)) = env() else { return };
+    let prompt = "The quick brown fox jumps over the lazy dog. Hello world! Numbers: 42 1234";
+    for name in ["qwen3moe-f32", "qwen2moe-f32", "llama-moe-f32"] {
+        compare(&dir.join(format!("{name}.gguf")), &bin, prompt, 2e-3);
+    }
+    let p = dir.join("qwen3moe-Q4_K_M.gguf");
+    let r = dir.join("qwen3moe-Q4_K_M-deq.gguf");
+    if p.exists() && r.exists() {
+        compare_with(&p, &r, &bin, prompt, 2e-3);
+    }
 }

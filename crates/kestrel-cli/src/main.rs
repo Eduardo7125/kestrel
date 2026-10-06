@@ -6,7 +6,7 @@ mod common;
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
 use common::{gb, Overrides};
-use kestrel_backends::{InferenceSession, NativeOptions, NativeSession};
+use kestrel_backends::{InferenceSession, NativeSession};
 use kestrel_engine::{ChatMessage, GenParams, SamplerConfig};
 use kestrel_gguf::GgmlType;
 use kestrel_model::GroupKind;
@@ -291,7 +291,7 @@ fn load_native(arg: &str, o: &Overrides) -> Result<NativeSession> {
         gb(p.chosen.disk_weights),
         p.n_ctx
     );
-    NativeSession::load(p, &g, m, NativeOptions { adaptive: !o.no_adapt })
+    NativeSession::load(p, &g, m, o.native_options())
 }
 
 fn print_stats(st: &kestrel_engine::GenStats, sess: &NativeSession) {
@@ -309,6 +309,12 @@ fn print_stats(st: &kestrel_engine::GenStats, sess: &NativeSession) {
         m.prefetch_accuracy * 100.0,
         gb(kestrel_hw::process_rss().unwrap_or(0))
     );
+    if let Some(e) = &st.experts {
+        eprintln!(
+            "[experts: hit {:.0}% ({} of {} requests) · {} cached / {} capacity · scratch {} · lookahead recall {:.0}% · prefetch {} issued, {} used · stall {:.2}s]",
+            e.hit_rate * 100.0, e.hits, e.requests, e.cached, e.capacity, e.scratch_loads, e.lookahead_recall * 100.0, e.prefetch_issued, e.prefetch_used, e.stall_s
+        );
+    }
     if let Some(p) = &sess.engine.tf.profile {
         eprintln!("[profile: matmul {:.2}s · attention {:.2}s · weight wait {:.2}s · other {:.2}s]", p.matmul_s, p.attention_s, p.lease_s, p.other_s);
     }

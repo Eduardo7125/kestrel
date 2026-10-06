@@ -1,0 +1,27 @@
+MoE: 768 experts of 5.3 MB each; cache for ~25% of them
+model synthetic-moe-6b-Q4_K · 4.32 GB weights (4.23 GB in layers) · streaming arms: RAM budget 1.64 GB (~75% of layer bytes streamed)
+arms: kestrel, lookahead-always, no-lookahead  ·  runs: 5 (interleaved)  ·  32 tokens
+  run 1 kestrel       decode    3.49 tok/s · prefill    10.5 tok/s · peak RSS   1.40 GB · hit   73% · stall   4.56s
+  run 1 lookahead-always decode    4.43 tok/s · prefill    10.4 tok/s · peak RSS   1.39 GB · hit   73% · stall   2.78s
+  run 1 no-lookahead  decode    3.57 tok/s · prefill    11.5 tok/s · peak RSS   1.32 GB · hit   46% · stall   4.07s
+  run 2 kestrel       decode    4.28 tok/s · prefill    11.8 tok/s · peak RSS   1.40 GB · hit   73% · stall   2.63s
+  run 2 lookahead-always decode    4.16 tok/s · prefill    12.0 tok/s · peak RSS   1.40 GB · hit   73% · stall   2.63s
+  run 2 no-lookahead  decode    4.04 tok/s · prefill    12.0 tok/s · peak RSS   1.32 GB · hit   47% · stall   3.58s
+  run 3 kestrel       decode    4.17 tok/s · prefill    12.9 tok/s · peak RSS   1.40 GB · hit   73% · stall   2.67s
+  run 3 lookahead-always decode    4.23 tok/s · prefill    11.8 tok/s · peak RSS   1.40 GB · hit   73% · stall   2.72s
+  run 3 no-lookahead  decode    3.62 tok/s · prefill    11.3 tok/s · peak RSS   1.32 GB · hit   47% · stall   3.99s
+  run 4 kestrel       decode    4.29 tok/s · prefill    12.2 tok/s · peak RSS   1.40 GB · hit   73% · stall   2.70s
+  run 4 lookahead-always decode    4.26 tok/s · prefill    11.2 tok/s · peak RSS   1.40 GB · hit   73% · stall   2.73s
+  run 4 no-lookahead  decode    3.84 tok/s · prefill    11.5 tok/s · peak RSS   1.32 GB · hit   47% · stall   3.86s
+  run 5 kestrel       decode    4.30 tok/s · prefill    10.9 tok/s · peak RSS   1.40 GB · hit   73% · stall   2.87s
+  run 5 lookahead-always decode    4.52 tok/s · prefill    12.7 tok/s · peak RSS   1.40 GB · hit   73% · stall   2.55s
+  run 5 no-lookahead  decode    4.16 tok/s · prefill    12.8 tok/s · peak RSS   1.32 GB · hit   47% · stall   3.45s
+
+ARM            decode tok/s  prefill t/s   peak RSS  streamed/t     hit stall/tok    disk BW  prefetch  output
+kestrel         4.28 [3.49-4.30]         11.8    1.40 GB         0 B     73%    0.084s      0 B/s        0%  identical
+               experts: hit 73% · read 392.5 MB/token · lookahead recall 76%
+lookahead-always  4.26 [4.16-4.52]         11.8    1.40 GB         0 B     73%    0.085s      0 B/s        0%  identical
+               experts: hit 73% · read 389.9 MB/token · lookahead recall 76%
+no-lookahead    3.84 [3.57-4.16]         11.5    1.32 GB         0 B     47%    0.121s      0 B/s        0%  identical
+               experts: hit 47% · read 300.2 MB/token · lookahead recall off
+raw results → benchmarks/results/syn-moe-q4k-lookahead.json

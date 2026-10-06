@@ -48,6 +48,9 @@ pub fn plan_text(p: &ExecutionPlan) -> String {
         let how = if c.backend == Backend::Native { format!("streamed through a {} ring, prefetch depth {}", fb(c.ring_bytes), p.store.prefetch_depth) } else { "paged by mmap".into() };
         let _ = writeln!(s, "  NVMe  {} weights {how}", fb(c.disk_weights));
     }
+    if let Some(cap) = c.expert_cache {
+        let _ = writeln!(s, "  MoE   expert cache holds {cap} routed experts (LFRU, router-lookahead prefetch); the rest stream on demand");
+    }
     if c.experts_on_cpu {
         let _ = writeln!(s, "  MoE   routed experts on CPU, attention/shared in VRAM");
     }

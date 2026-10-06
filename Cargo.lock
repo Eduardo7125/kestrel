@@ -513,6 +513,7 @@ dependencies = [
  "kestrel-hw",
  "kestrel-model",
  "serde",
+ "serde_json",
  "tempfile",
  "thiserror",
 ]

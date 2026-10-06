@@ -24,14 +24,19 @@ orchestrator**:
 * **prefetch** along the execution order;
 * **Belady-optimal** eviction for cyclic layer scans;
 * a **rebalancer** that promotes and demotes layers at runtime under a
-  memory guard that trusts measured RSS over projections.
+  memory guard that trusts measured RSS over projections;
+* for MoE models, an **expert cache**: one routed expert per unit, LFRU with
+  hysteresis, batch-union loading, router-lookahead prefetch, and
+  usage-history warm starts. This generalizes
+  [Colibrì](docs/colibri-analysis.md)'s design.
 
 Inference arithmetic is pluggable. The native Rust CPU executor runs every
 weight access through Kestrel's scheduler, and an adapter hands Kestrel's
 placement to llama.cpp/ggml for GPU execution.
 
-Status: **MVP** (dense llama/qwen2/qwen3 GGUF; planning for any GGUF
-including MoE). See [the roadmap](docs/roadmap.md).
+Status: **MVP**. Native execution covers dense llama/qwen2/qwen3 and MoE
+qwen2moe/qwen3moe/Mixtral-style GGUFs, with expert-granular streaming. Kestrel
+can plan any GGUF. See [the roadmap](docs/roadmap.md).
 
 ---
 

@@ -102,7 +102,9 @@ const DEMAND_PAGING_EFFICIENCY: f64 = 0.5;
 const GPU_LAYER_OVERHEAD_S: f64 = 25e-6;
 
 #[allow(clippy::too_many_arguments)]
-pub fn estimate(model: &ModelDesc, tiers: &[Tier], kv_bytes: u64, kv_tier: Tier, n_ctx: u64, bw: &Bandwidths, cpu_bw: f64, overlapped: bool, n_gpu_layers: u32) -> Estimate {
+/// `expert_miss`: fraction of touched routed-expert bytes that must come from
+/// disk when expert groups are on the disk tier (1.0 = no cache).
+pub fn estimate(model: &ModelDesc, tiers: &[Tier], kv_bytes: u64, kv_tier: Tier, n_ctx: u64, bw: &Bandwidths, cpu_bw: f64, overlapped: bool, n_gpu_layers: u32, expert_miss: f64) -> Estimate {
     let (mut gpu, mut cpu, mut disk) = (0f64, 0f64, 0f64);
     for g in &model.groups {
         let touched = g.bytes as f64 * g.touch_per_token;
@@ -110,8 +112,10 @@ pub fn estimate(model: &ModelDesc, tiers: &[Tier], kv_bytes: u64, kv_tier: Tier,
             Tier::Vram => gpu += touched,
             Tier::Ram => cpu += touched,
             Tier::Disk => {
-                // A streamed dense group is read whole; experts by touch.
-                disk += touched;
+                // A streamed dense group is read whole; experts by touch,
+                // minus what the expert cache serves.
+                let miss = if g.kind == kestrel_model::GroupKind::Experts { expert_miss } else { 1.0 };
+                disk += touched * miss;
                 cpu += touched;
             }
         }

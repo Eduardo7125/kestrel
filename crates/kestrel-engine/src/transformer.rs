@@ -1,12 +1,14 @@
-//! The llama-family forward pass (llama, qwen2, qwen3) over Kestrel's
+//! The llama-family forward pass (llama, qwen2, qwen3, and their MoE
+//! variants qwen2moe, qwen3moe, Mixtral-style llama) over Kestrel's
 //! [`WeightStore`]: every weight is reached through a lease, so the same code
 //! runs with the model fully resident, partially streamed, or streamed
 //! layer by layer from NVMe.
 
 use crate::quant::{self, matmul};
 use kestrel_gguf::GgmlType;
-use kestrel_memory::{Ledger, Lease, Reservation, StoreError, Tier, WeightStore};
-use kestrel_model::{GroupKind, ModelDesc};
+use kestrel_memory::{ExpertStore, Ledger, Lease, Reservation, StoreError, Tier, WeightStore};
+use kestrel_model::{GroupKind, ModelDesc, MoeInfo};
+use std::sync::Mutex;
 use rayon::prelude::*;
 use std::sync::Arc;
 
@@ -54,18 +56,26 @@ struct LayerW {
     q_norm: Option<T>,
     k_norm: Option<T>,
     ffn_norm: T,
-    gate: T,
-    up: T,
-    down: T,
+    // Dense FFN.
+    gate: Option<T>,
+    up: Option<T>,
+    down: Option<T>,
+    // MoE FFN: router, stacked experts (gate, up, down), shared expert.
+    router: Option<T>,
+    exps: Option<[T; 3]>,
+    sh_inp: Option<T>,
+    sh_gate: Option<T>,
+    sh_up: Option<T>,
+    sh_down: Option<T>,
 }
 
 /// Check that the native executor can run `model`.
 pub fn check_support(model: &ModelDesc) -> Result<(), String> {
-    if !matches!(model.arch.as_str(), "llama" | "qwen2" | "qwen3") {
-        return Err(format!("architecture '{}' (native: llama, qwen2, qwen3; use --backend llamacpp)", model.arch));
+    if !matches!(model.arch.as_str(), "llama" | "qwen2" | "qwen3" | "qwen2moe" | "qwen3moe") {
+        return Err(format!("architecture '{}' (native: llama, qwen2, qwen3, qwen2moe, qwen3moe; use --backend llamacpp)", model.arch));
     }
-    if model.moe.is_some() {
-        return Err("MoE execution is not implemented in the native executor yet".into());
+    if model.moe.is_some() && kestrel_memory::expert::ExpertGeometry::from_model(model).is_none() {
+        return Err("MoE model without stacked *_exps expert tensors".into());
     }
     for t in &model.tensors {
         if !quant::is_supported(t.ggml_type) {
@@ -110,6 +120,14 @@ pub struct Transformer {
     /// Seconds per phase (weights wait, matmul, attention, other), when
     /// `KESTREL_PROFILE=1`.
     pub profile: Option<Profile>,
+    /// Routed experts (MoE models).
+    pub experts: Option<Arc<ExpertStore>>,
+    moe: Option<MoeInfo>,
+    /// Router-lookahead prefetch: predict layer l+1's experts from layer l's
+    /// post-attention state (Colibrì's PILOT). `KESTREL_LOOKAHEAD=0` disables.
+    pub lookahead: bool,
+    /// Predicted experts per layer, to score recall when the layer routes.
+    predicted: Mutex<Vec<Option<Vec<u32>>>>,
 }
 
 #[derive(Clone, Debug, Default, serde::Serialize)]
@@ -122,11 +140,14 @@ pub struct Profile {
 }
 
 impl Transformer {
-    pub fn new(model: Arc<ModelDesc>, store: WeightStore, n_ctx: usize, threads: usize, ledger: &Arc<Ledger>) -> Result<Self, EngineError> {
+    pub fn new(model: Arc<ModelDesc>, store: WeightStore, experts: Option<Arc<ExpertStore>>, n_ctx: usize, threads: usize, ledger: &Arc<Ledger>) -> Result<Self, EngineError> {
         check_support(&model).map_err(EngineError::Unsupported)?;
+        if model.moe.is_some() && experts.is_none() {
+            return Err(EngineError::Unsupported("MoE model needs an expert store".into()));
+        }
         let arch = match model.arch.as_str() {
             "llama" => Arch::Llama,
-            "qwen2" => Arch::Qwen2,
+            "qwen2" | "qwen2moe" => Arch::Qwen2,
             _ => Arch::Qwen3,
         };
         let hp = &model.hparams;
@@ -156,10 +177,25 @@ impl Transformer {
                 q_norm: find(&p("attn_q_norm.weight")),
                 k_norm: find(&p("attn_k_norm.weight")),
                 ffn_norm: req(p("ffn_norm.weight"))?,
-                gate: req(p("ffn_gate.weight"))?,
-                up: req(p("ffn_up.weight"))?,
-                down: req(p("ffn_down.weight"))?,
+                gate: find(&p("ffn_gate.weight")),
+                up: find(&p("ffn_up.weight")),
+                down: find(&p("ffn_down.weight")),
+                router: find(&p("ffn_gate_inp.weight")),
+                exps: match (find(&p("ffn_gate_exps.weight")), find(&p("ffn_up_exps.weight")), find(&p("ffn_down_exps.weight"))) {
+                    (Some(g), Some(u), Some(d)) => Some([g, u, d]),
+                    _ => None,
+                },
+                sh_inp: find(&p("ffn_gate_inp_shexp.weight")),
+                sh_gate: find(&p("ffn_gate_shexp.weight")),
+                sh_up: find(&p("ffn_up_shexp.weight")),
+                sh_down: find(&p("ffn_down_shexp.weight")),
             });
+            let lw = layers.last().unwrap();
+            let dense = lw.gate.is_some() && lw.up.is_some() && lw.down.is_some();
+            let moe = lw.router.is_some() && lw.exps.is_some();
+            if !dense && !moe {
+                return Err(EngineError::Unsupported(format!("layer {l} has neither a dense nor a routed FFN")));
+            }
         }
         let embed_group = group_of(GroupKind::Embed, None)?;
         let head_group = group_of(GroupKind::Head, None)?;
@@ -220,6 +256,10 @@ impl Transformer {
             _kv_res: kv_res,
             n_batch: 256,
             profile: std::env::var("KESTREL_PROFILE").ok().filter(|v| v == "1").map(|_| Profile::default()),
+            lookahead: std::env::var("KESTREL_LOOKAHEAD").map(|v| v != "0").unwrap_or(true),
+            predicted: Mutex::new(vec![None; hp.n_layer as usize]),
+            moe: model.moe.clone(),
+            experts,
             model,
             store,
         })
@@ -389,16 +429,27 @@ impl Transformer {
             };
             x.iter_mut().zip(&attn_out).for_each(|(a, b)| *a += b);
 
-            // ---- feed-forward (SwiGLU) ----
+            // Router lookahead: guess the next MoE layer's experts from this
+            // layer's post-attention state and start loading them now.
+            if self.lookahead && s_rows <= 4 && l + 1 < self.layers.len() && self.layers[l + 1].router.is_some() {
+                self.lookahead_prefetch(l + 1, &x)?;
+            }
+
+            // ---- feed-forward (SwiGLU, dense or routed experts) ----
             let ffn_out = {
                 let lw = self.layers[l];
                 let lease = self.lease(lw.ffn_group)?;
                 let h = self.rmsnorm(&x, &self.vec_of(&lease, lw.ffn_norm), d);
-                let mut g = self.mm(&lease, lw.gate, &h);
-                let u = self.mm(&lease, lw.up, &h);
-                g.iter_mut().zip(&u).for_each(|(gv, uv)| *gv = *gv / (1.0 + (-*gv).exp()) * uv);
-                debug_assert_eq!(g.len(), s_rows * self.n_ff);
-                self.mm(&lease, lw.down, &g)
+                if lw.router.is_some() {
+                    self.moe_ffn(l, &lease, &h)?
+                } else {
+                    let (gate, up, down) = (lw.gate.unwrap(), lw.up.unwrap(), lw.down.unwrap());
+                    let mut g = self.mm(&lease, gate, &h);
+                    let u = self.mm(&lease, up, &h);
+                    g.iter_mut().zip(&u).for_each(|(gv, uv)| *gv = *gv / (1.0 + (-*gv).exp()) * uv);
+                    debug_assert_eq!(g.len(), s_rows * self.n_ff);
+                    self.mm(&lease, down, &g)
+                }
             };
             x.iter_mut().zip(&ffn_out).for_each(|(a, b)| *a += b);
         }
@@ -413,6 +464,128 @@ impl Transformer {
         let (og, ot) = self.output;
         let lease = self.lease(og)?;
         Ok(self.mm(&lease, ot, &normed))
+    }
+
+    /// Router: softmax over experts, top-k, optional renormalization and
+    /// scaling (llama.cpp `build_moe_ffn` semantics). Returns per row the
+    /// selected (expert, weight) pairs.
+    fn route(&self, lease: &Lease, router: T, h: &[f32]) -> Vec<Vec<(u32, f32)>> {
+        let moe = self.moe.as_ref().unwrap();
+        let (ne, k) = (moe.n_expert as usize, moe.n_expert_used as usize);
+        let logits = self.mm(lease, router, h);
+        logits
+            .chunks_exact(ne)
+            .map(|row| {
+                let m = row.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+                let mut p: Vec<f32> = row.iter().map(|v| (v - m).exp()).collect();
+                let sum: f32 = p.iter().sum();
+                p.iter_mut().for_each(|v| *v /= sum);
+                let mut idx: Vec<usize> = (0..ne).collect();
+                idx.sort_by(|&a, &b| p[b].partial_cmp(&p[a]).unwrap_or(std::cmp::Ordering::Equal).then(a.cmp(&b)));
+                let mut sel: Vec<(u32, f32)> = idx[..k].iter().map(|&e| (e as u32, p[e])).collect();
+                if moe.norm_topk {
+                    let s: f32 = sel.iter().map(|x| x.1).sum::<f32>().max(6.103_515_6e-5);
+                    sel.iter_mut().for_each(|x| x.1 /= s);
+                }
+                if moe.weights_scale != 0.0 && moe.weights_scale != 1.0 {
+                    sel.iter_mut().for_each(|x| x.1 *= moe.weights_scale);
+                }
+                sel
+            })
+            .collect()
+    }
+
+    fn lookahead_prefetch(&self, next: usize, x: &[f32]) -> Result<(), EngineError> {
+        let lw = self.layers[next];
+        let lease = self.lease(lw.ffn_group)?;
+        let h = self.rmsnorm(x, &self.vec_of(&lease, lw.ffn_norm), self.n_embd);
+        let mut pred: Vec<u32> = self.route(&lease, lw.router.unwrap(), &h).into_iter().flatten().map(|(e, _)| e).collect();
+        pred.sort_unstable();
+        pred.dedup();
+        self.experts.as_ref().unwrap().prefetch(next as u32, &pred);
+        self.predicted.lock().unwrap()[next] = Some(pred);
+        Ok(())
+    }
+
+    /// Mixture-of-experts FFN with batch union: every expert routed by any
+    /// row is fetched once and applied to all of its rows. Cached experts are
+    /// computed first while missing ones load in parallel.
+    fn moe_ffn(&self, l: usize, lease: &Lease, h: &[f32]) -> Result<Vec<f32>, EngineError> {
+        let lw = self.layers[l];
+        let d = self.n_embd;
+        let s_rows = h.len() / d;
+        let ex = self.experts.as_ref().unwrap();
+        let ne = self.moe.as_ref().unwrap().n_expert as usize;
+        let routes = self.route(lease, lw.router.unwrap(), h);
+        if let Some(pred) = self.predicted.lock().unwrap()[l].take() {
+            let actual: std::collections::BTreeSet<u32> = routes.iter().flatten().map(|x| x.0).collect();
+            let correct = pred.iter().filter(|e| actual.contains(e)).count() as u64;
+            ex.record_lookahead(pred.len() as u64, correct);
+        }
+        let mut assign: std::collections::BTreeMap<u32, Vec<(usize, f32)>> = Default::default();
+        for (s, sel) in routes.iter().enumerate() {
+            for &(e, w) in sel {
+                assign.entry(e).or_default().push((s, w));
+            }
+        }
+        let needed: Vec<u32> = assign.keys().copied().collect();
+        ex.request(l as u32, &needed)?;
+        let mut order = needed.clone();
+        order.sort_by_key(|&e| !ex.is_ready(l as u32, e));
+
+        let [tg, tu, td] = lw.exps.unwrap();
+        let ff = tg.rows / ne;
+        let mut out = vec![0f32; s_rows * d];
+        // Experts are *computed* in residency order (cached first), but their
+        // contributions are *summed* in expert-id order, so the result is
+        // bit-identical whatever the cache state (float addition does not
+        // commute bitwise).
+        let mut ys: std::collections::BTreeMap<u32, Vec<f32>> = Default::default();
+        for e in order {
+            let rows = &assign[&e];
+            let t0 = std::time::Instant::now();
+            let eb = ex.get(l as u32, e)?;
+            if self.profile.is_some() {
+                LEASE_NS.fetch_add(t0.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+            }
+            let xs: Vec<f32> = rows.iter().flat_map(|&(s, _)| h[s * d..(s + 1) * d].iter().copied()).collect();
+            let n = rows.len();
+            let tm = std::time::Instant::now();
+            let mut g = vec![0f32; n * ff];
+            let mut u = vec![0f32; n * ff];
+            matmul(tg.ty, eb.part(0), ff, d, &xs, &mut g);
+            matmul(tu.ty, eb.part(1), ff, d, &xs, &mut u);
+            g.iter_mut().zip(&u).for_each(|(gv, uv)| *gv = *gv / (1.0 + (-*gv).exp()) * uv);
+            let mut y = vec![0f32; n * d];
+            matmul(td.ty, eb.part(2), d, ff, &g, &mut y);
+            if self.profile.is_some() {
+                MM_NS.fetch_add(tm.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+            }
+            ys.insert(e, y);
+        }
+        for (e, y) in &ys {
+            for (i, &(s, w)) in assign[e].iter().enumerate() {
+                out[s * d..(s + 1) * d].iter_mut().zip(&y[i * d..(i + 1) * d]).for_each(|(o, v)| *o += w * v);
+            }
+        }
+        // Shared expert (qwen2moe): always active, scaled by sigmoid(gate·h).
+        if let (Some(sg), Some(su), Some(sd)) = (lw.sh_gate, lw.sh_up, lw.sh_down) {
+            let mut g = self.mm(lease, sg, h);
+            let u = self.mm(lease, su, h);
+            g.iter_mut().zip(&u).for_each(|(gv, uv)| *gv = *gv / (1.0 + (-*gv).exp()) * uv);
+            let y = self.mm(lease, sd, &g);
+            let gate: Vec<f32> = match lw.sh_inp {
+                Some(si) => {
+                    let w = self.vec_of(lease, si);
+                    (0..s_rows).map(|s| 1.0 / (1.0 + (-quant::dot(&w, &h[s * d..(s + 1) * d])).exp())).collect()
+                }
+                None => vec![1.0; s_rows],
+            };
+            for s in 0..s_rows {
+                out[s * d..(s + 1) * d].iter_mut().zip(&y[s * d..(s + 1) * d]).for_each(|(o, v)| *o += gate[s] * v);
+            }
+        }
+        Ok(out)
     }
 
     /// Causal GQA attention for `s_rows` new queries at positions `pos0..`.

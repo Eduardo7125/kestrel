@@ -37,6 +37,11 @@ pub struct BenchArgs {
     pub prompt_tokens: usize,
     #[arg(long, short = 't')]
     pub threads: Option<usize>,
+    /// Sampling temperature (fixed seed, so arms stay comparable). Default:
+    /// 0 (greedy) for dense models, 1.0 for MoE models, where greedy decoding
+    /// of random weights repeats one token and freezes the routing.
+    #[arg(long)]
+    pub temperature: Option<f32>,
     /// Write raw results here.
     #[arg(long)]
     pub json: Option<std::path::PathBuf>,
@@ -71,6 +76,13 @@ pub struct ArmRun {
     pub page_cache_growth: i64,
     pub output_hash: String,
     pub note: String,
+    /// MoE: expert-cache hit rate, router-lookahead recall, expert bytes read.
+    #[serde(default)]
+    pub expert_hit_rate: Option<f64>,
+    #[serde(default)]
+    pub lookahead_recall: Option<f64>,
+    #[serde(default)]
+    pub expert_bytes: Option<u64>,
 }
 
 fn meminfo_cached() -> i64 {
@@ -88,6 +100,9 @@ fn drop_file_cache(path: &std::path::Path) {
 }
 
 const NATIVE_ARMS: &[&str] = &["resident", "kestrel", "no-prefetch", "page-cache", "contiguous", "lru-cache", "belady-cache"];
+/// MoE models: the expert cache is the variable (`--stream-fraction` = share
+/// of expert bytes that do not fit in it).
+const MOE_ARMS: &[&str] = &["resident", "kestrel", "lookahead-always", "no-lookahead", "lru-experts"];
 
 pub fn run(a: BenchArgs) -> Result<()> {
     if let Some(arm) = a.single_arm.clone() {
@@ -97,7 +112,8 @@ pub fn run(a: BenchArgs) -> Result<()> {
     }
     let (_, m) = common::open_model(&a.model)?;
     let hw = common::hardware(Some(&m), false, false);
-    let mut arms: Vec<String> = if a.arms == "auto" { NATIVE_ARMS.iter().map(|s| s.to_string()).collect() } else { a.arms.split(',').map(|s| s.trim().to_string()).collect() };
+    let default_arms = if m.moe.is_some() { MOE_ARMS } else { NATIVE_ARMS };
+    let mut arms: Vec<String> = if a.arms == "auto" { default_arms.iter().map(|s| s.to_string()).collect() } else { a.arms.split(',').map(|s| s.trim().to_string()).collect() };
     let llama_bench = kestrel_backends::llamacpp::find_tool("llama-bench");
     if a.arms == "auto" && llama_bench.is_some() {
         arms.extend(["llamacpp-cpu".to_string()]);
@@ -108,7 +124,17 @@ pub fn run(a: BenchArgs) -> Result<()> {
     let max_group = m.groups.iter().filter(|g| g.layer.is_some()).map(|g| g.bytes).max().unwrap_or(0);
     let n_ctx = 512u64;
     let kv = m.kv_bytes(n_ctx, kestrel_gguf::GgmlType::F16);
-    let budget = other + ((1.0 - a.stream_fraction) * layer_bytes as f64) as u64 + 3 * max_group + kv + 64 * 4096 + kestrel_planner::runtime_overhead(&m, n_ctx);
+    let mut budget = other + ((1.0 - a.stream_fraction) * layer_bytes as f64) as u64 + 3 * max_group + kv + 64 * 4096 + kestrel_planner::runtime_overhead(&m, n_ctx);
+    if let Some(moe) = &m.moe {
+        // Dense part resident; the fraction applies to routed-expert bytes.
+        let expert_bytes: u64 = m.groups.iter().filter(|g| g.kind == kestrel_model::GroupKind::Experts).map(|g| g.bytes).sum();
+        let unit = moe.bytes_per_expert + 3 * 4096;
+        let scratch = 4 * moe.n_expert_used as u64 * unit;
+        let cached = ((1.0 - a.stream_fraction) * expert_bytes as f64) as u64;
+        let n_tot = moe.n_expert as u64 * moe.moe_layers as u64;
+        budget = m.weight_bytes() - expert_bytes + cached + cached / moe.bytes_per_expert.max(1) * 3 * 4096 + scratch + kv + 64 * 4096 + kestrel_planner::runtime_overhead(&m, n_ctx);
+        eprintln!("MoE: {} experts of {} each; cache for ~{:.0}% of them", n_tot, gb(moe.bytes_per_expert), (1.0 - a.stream_fraction) * 100.0);
+    }
     eprintln!(
         "model {} · {} weights ({} in layers) · streaming arms: RAM budget {} (~{:.0}% of layer bytes streamed)",
         m.name,
@@ -138,6 +164,15 @@ pub fn run(a: BenchArgs) -> Result<()> {
                 cmd.args(["--ram-budget-bytes", &budget.to_string()]);
                 if let Some(t) = a.threads {
                     cmd.args(["--threads", &t.to_string()]);
+                }
+                if let Some(t) = a.temperature {
+                    cmd.args(["--temperature", &t.to_string()]);
+                }
+                if arm == "no-lookahead" {
+                    cmd.env("KESTREL_LOOKAHEAD", "0");
+                }
+                if arm == "lookahead-always" {
+                    cmd.env("KESTREL_SPEC_MIN_ACCURACY", "0");
                 }
                 let out = cmd.output()?;
                 let stdout = String::from_utf8_lossy(&out.stdout);
@@ -215,6 +250,17 @@ fn summarize(results: &[ArmRun], arms: &[String]) {
             median(rs.iter().map(|r| r.prefetch_accuracy).collect()) * 100.0,
             same
         );
+        if let Some(eh) = r0.expert_hit_rate {
+            let recall: Vec<f64> = rs.iter().filter_map(|r| r.lookahead_recall).collect();
+            println!(
+                "{:<14} experts: hit {:.0}% · read {}/token · lookahead recall {}",
+                "",
+                median(rs.iter().filter_map(|r| r.expert_hit_rate).collect()) * 100.0,
+                gb(r0.expert_bytes.unwrap_or(0) / (r0.generated.max(1) + 1) as u64),
+                if recall.is_empty() { "off".to_string() } else { format!("{:.0}%", median(recall) * 100.0) }
+            );
+            let _ = eh;
+        }
         if !r0.note.is_empty() {
             println!("{:<14} note: {}", "", r0.note);
         }
@@ -248,6 +294,8 @@ fn run_arm(a: &BenchArgs, arm: &str) -> Result<ArmRun> {
         allow_overcommit: streaming,
         no_adapt: true,
         no_bench: true,
+        expert_policy: if arm == "lru-experts" { common::ExpertPolicyArg::Lru } else { common::ExpertPolicyArg::Lfru },
+        no_usage_history: true,
     };
     let hw = common::hardware(Some(&m), true, true);
     let req = o.request(&m)?;
@@ -279,7 +327,7 @@ fn run_arm(a: &BenchArgs, arm: &str) -> Result<ArmRun> {
     let ram_budget = plan.budgets.ram.usable;
     let m = std::sync::Arc::new(m);
     let cache0 = meminfo_cached();
-    let mut sess = NativeSession::load(plan, &g, m.clone(), NativeOptions { adaptive: false })?;
+    let mut sess = NativeSession::load(plan, &g, m.clone(), NativeOptions { adaptive: false, ..o.native_options() })?;
     let load_s = sess.load_s;
 
     // A deterministic prompt of roughly the requested length.
@@ -290,7 +338,9 @@ fn run_arm(a: &BenchArgs, arm: &str) -> Result<ArmRun> {
     }
     let mut toks = sess.tokenize(&text);
     toks.truncate(a.prompt_tokens.max(2));
-    let params = GenParams { max_tokens: a.tokens, sampler: SamplerConfig::greedy(), ignore_eos: true, ..Default::default() };
+    let temp = a.temperature.unwrap_or(if m.moe.is_some() { 1.0 } else { 0.0 });
+    let sampler = if temp > 0.0 { SamplerConfig { temperature: temp, top_k: 0, top_p: 1.0, min_p: 0.0, repeat_penalty: 1.0, repeat_last_n: 0, seed: 42 } } else { SamplerConfig::greedy() };
+    let params = GenParams { max_tokens: a.tokens, sampler, ignore_eos: true, ..Default::default() };
     let st = sess.generate(&toks, &params, &mut |_| true)?;
     let mem = st.memory.clone().unwrap_or_default();
     let mut h: u64 = 0xcbf29ce484222325;
@@ -313,8 +363,8 @@ fn run_arm(a: &BenchArgs, arm: &str) -> Result<ArmRun> {
         ram_budget,
         resident_weight_bytes,
         streamed_bytes_per_token: sess.store.streamed_bytes_per_pass(),
-        hit_rate: mem.hit_rate,
-        stall_s: mem.stall_s,
+        hit_rate: st.experts.as_ref().map(|e| e.hit_rate).unwrap_or(mem.hit_rate),
+        stall_s: mem.stall_s + st.experts.as_ref().map(|e| e.stall_s).unwrap_or(0.0),
         stream_bytes: mem.stream_bytes,
         disk_bw: mem.disk_bw,
         prefetch_accuracy: mem.prefetch_accuracy,
@@ -322,6 +372,9 @@ fn run_arm(a: &BenchArgs, arm: &str) -> Result<ArmRun> {
         page_cache_growth: meminfo_cached() - cache0,
         output_hash: format!("{h:016x}"),
         note,
+        expert_hit_rate: st.experts.as_ref().map(|e| e.hit_rate),
+        lookahead_recall: st.experts.as_ref().filter(|e| e.lookahead_predicted > 0).map(|e| e.lookahead_recall),
+        expert_bytes: st.experts.as_ref().map(|e| e.bytes_read),
     })
 }
 
@@ -368,5 +421,8 @@ fn llamacpp_arm(bin: &std::path::Path, model: &str, arm: &str, a: &BenchArgs, ru
         page_cache_growth: 0,
         output_hash: String::new(),
         note: "llama.cpp (mmap, own kernels, own placement); RSS not measured".into(),
+        expert_hit_rate: None,
+        lookahead_recall: None,
+        expert_bytes: None,
     })
 }
