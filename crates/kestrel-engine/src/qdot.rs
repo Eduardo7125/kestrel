@@ -332,3 +332,65 @@ mod tests {
         }
     }
 }
+
+/// An activation row quantized to int8 in blocks of 256 (llama.cpp's Q8_K):
+/// one scale per 256 values, plus Σq per 16 values. With K-quant weights the
+/// 6-bit sub-block scales can then be applied in integer arithmetic and float
+/// math happens once per 256 weights.
+pub struct Q8KRow {
+    pub q: Vec<i8>,
+    pub d: Vec<f32>,
+    pub bsums: Vec<i32>,
+}
+
+impl Q8KRow {
+    pub fn quantize(x: &[f32]) -> Self {
+        assert_eq!(x.len() % 256, 0);
+        let nb = x.len() / 256;
+        let mut q = vec![0i8; x.len()];
+        let mut d = vec![0f32; nb];
+        let mut bsums = vec![0i32; x.len() / 16];
+        for b in 0..nb {
+            let xs = &x[b * 256..(b + 1) * 256];
+            let amax = xs.iter().fold(0f32, |a, v| a.max(v.abs()));
+            let scale = amax / 127.0;
+            let inv = if scale > 0.0 { 1.0 / scale } else { 0.0 };
+            d[b] = scale;
+            for j in 0..256 {
+                q[b * 256 + j] = ((xs[j] * inv).round() as i32).clamp(-127, 127) as i8;
+            }
+        }
+        for (k, s) in bsums.iter_mut().enumerate() {
+            *s = q[k * 16..k * 16 + 16].iter().map(|&v| v as i32).sum();
+        }
+        Q8KRow { q, d, bsums }
+    }
+}
+
+/// Whether `t` has a Q8_K (256-block) fused kernel on this CPU.
+pub fn has_fused_k(t: GgmlType) -> bool {
+    #[cfg(target_arch = "x86_64")]
+    if use_avx2() {
+        return matches!(t, GgmlType::Q4_K | GgmlType::Q6_K);
+    }
+    let _ = t;
+    false
+}
+
+/// Fused dot of a K-quant weight row with a Q8_K activation row.
+#[inline]
+pub fn dot_fused_k(t: GgmlType, w: &[u8], a: &Q8KRow) -> f32 {
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        return match t {
+            GgmlType::Q4_K => crate::avx2::dot_q4_k_8k(w, a),
+            GgmlType::Q6_K => crate::avx2::dot_q6_k_8k(w, a),
+            _ => unreachable!(),
+        };
+    }
+    #[allow(unreachable_code)]
+    {
+        let _ = (w, a);
+        unreachable!("no Q8_K kernel for {t}")
+    }
+}

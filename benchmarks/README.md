@@ -208,6 +208,17 @@ All Kestrel arms produce **identical output**.
   virtual disks throttle after sustained bursts; this run cannot rule that
   in or out.
 
+## 6. Kernel update after the measurements above
+
+Sections 1-5 were measured with the earlier kernels. A later change applies
+Q4_K/Q6_K sub-block scales in integer arithmetic against 256-element
+activation blocks, as llama.cpp's Q8_K does. With the same commands, fully
+resident decode went from 9.8 to 13.5 tok/s (1.1B; llama.cpp 27) and from
+2.18 to 3.08 tok/s (7B; llama.cpp 4.8). The streaming comparisons above are
+relative within one kernel version and were not rerun. Faster compute makes
+streaming arms *more* disk-bound, so their relative gaps to `resident` should
+widen.
+
 ## Research questions: status after these runs
 
 | RQ | Status |

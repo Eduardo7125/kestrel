@@ -258,6 +258,27 @@ pub fn matmul(t: GgmlType, w: &[u8], rows: usize, cols: usize, x: &[f32], out: &
         scatter(tiles, s_rows, rows, out);
         return;
     }
+    // K-quants: Q8_K activations (256-blocks) and integer sub-block scales.
+    if !exact() && crate::qdot::has_fused_k(t) && cols % 256 == 0 {
+        let qx: Vec<crate::qdot::Q8KRow> = (0..s_rows).map(|s| crate::qdot::Q8KRow::quantize(&x[s * cols..(s + 1) * cols])).collect();
+        let tiles: Vec<(usize, Vec<f32>)> = (0..rows.div_ceil(TILE))
+            .into_par_iter()
+            .map(|ti| {
+                let r0 = ti * TILE;
+                let r1 = (r0 + TILE).min(rows);
+                let mut res = vec![0f32; (r1 - r0) * s_rows];
+                for r in r0..r1 {
+                    let wr = &w[r * row_bytes..(r + 1) * row_bytes];
+                    for (s, q) in qx.iter().enumerate() {
+                        res[(r - r0) * s_rows + s] = crate::qdot::dot_fused_k(t, wr, q);
+                    }
+                }
+                (r0, res)
+            })
+            .collect();
+        scatter(tiles, s_rows, rows, out);
+        return;
+    }
     if !exact() && crate::qdot::supports(t) && cols.is_multiple_of(32) {
         let qx: Vec<crate::qdot::Q8Row> = (0..s_rows).map(|s| crate::qdot::Q8Row::quantize(&x[s * cols..(s + 1) * cols])).collect();
         let tiles: Vec<(usize, Vec<f32>)> = (0..rows.div_ceil(TILE))

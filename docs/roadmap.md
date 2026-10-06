@@ -18,10 +18,12 @@ A phase that fails to show value is reported, not skipped silently.
 
 ## Near-term issues (post-MVP)
 
-1. **Kernel speed:** int8 activations with AVX2 kernels for Q8_0, Q4_0, Q4_K
-   and Q6_K are done, and so is an f32 AVX2 GEMM for prefill. Native decode is
-   still ~2.5-3× slower than llama.cpp CPU, and prefill ~2.8× slower
-   (43.6 vs 122 tok/s at 880 tokens on the 1.1B model). Remaining work:
+1. **Kernel speed:** int8 activations with AVX2 kernels (Q8_0, Q4_0, and
+   Q4_K/Q6_K against Q8_K-style 256-blocks with integer sub-block scales) and
+   an f32 AVX2 GEMM for prefill are done. Native decode is still 1.6-2× slower
+   than llama.cpp CPU (1.1B: 13.5 vs 27 tok/s; 7B: 3.1 vs 4.8 tok/s), and
+   prefill is ~2.8× slower. Remaining: AVX2 for Q5_K and the legacy 5-bit
+   types, NEON, AVX-512 VNNI, an int8 prefill GEMM, and SIMD attention. Remaining work:
    AVX2 kernels for Q5_K/Q4_1/Q5_x, NEON, AVX-512 VNNI, a batched-prefill
    GEMM, and SIMD attention.
 2. **io_uring backend** behind `--io uring` (Linux), measured against the pool.
