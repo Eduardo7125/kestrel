@@ -75,6 +75,10 @@ pub fn check_support(model: &ModelDesc) -> Result<(), String> {
     Ok(())
 }
 
+static MM_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static LEASE_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static ATTN_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
 pub struct Transformer {
     pub model: Arc<ModelDesc>,
     pub store: WeightStore,
@@ -103,6 +107,18 @@ pub struct Transformer {
     _kv_res: Reservation,
     /// Prompt rows processed per forward call.
     pub n_batch: usize,
+    /// Seconds per phase (weights wait, matmul, attention, other), when
+    /// `KESTREL_PROFILE=1`.
+    pub profile: Option<Profile>,
+}
+
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct Profile {
+    pub lease_s: f64,
+    pub matmul_s: f64,
+    pub attention_s: f64,
+    pub other_s: f64,
+    pub head_s: f64,
 }
 
 impl Transformer {
@@ -203,6 +219,7 @@ impl Transformer {
             pool,
             _kv_res: kv_res,
             n_batch: 64,
+            profile: std::env::var("KESTREL_PROFILE").ok().filter(|v| v == "1").map(|_| Profile::default()),
             model,
             store,
         })
@@ -247,8 +264,21 @@ impl Transformer {
     fn mm(&self, lease: &Lease, t: T, x: &[f32]) -> Vec<f32> {
         let s = x.len() / t.cols;
         let mut out = vec![0f32; s * t.rows];
+        let t0 = std::time::Instant::now();
         matmul(t.ty, lease.tensor(t.idx), t.rows, t.cols, x, &mut out);
+        if self.profile.is_some() {
+            MM_NS.fetch_add(t0.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+        }
         out
+    }
+
+    fn lease(&self, g: usize) -> Result<Lease, EngineError> {
+        let t0 = std::time::Instant::now();
+        let l = self.store.lease(g)?;
+        if self.profile.is_some() {
+            LEASE_NS.fetch_add(t0.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+        }
+        Ok(l)
     }
 
     fn vec_of(&self, lease: &Lease, t: T) -> Vec<f32> {
@@ -288,12 +318,27 @@ impl Transformer {
     }
 
     fn forward_chunk(&mut self, tokens: &[u32]) -> Result<Vec<f32>, EngineError> {
+        let t_all = std::time::Instant::now();
+        let (m0, l0, a0) = (MM_NS.load(std::sync::atomic::Ordering::Relaxed), LEASE_NS.load(std::sync::atomic::Ordering::Relaxed), ATTN_NS.load(std::sync::atomic::Ordering::Relaxed));
+        let r = self.forward_chunk_inner(tokens);
+        if let Some(p) = self.profile.as_mut() {
+            let g = |a: &std::sync::atomic::AtomicU64, b: u64| (a.load(std::sync::atomic::Ordering::Relaxed) - b) as f64 * 1e-9;
+            let (mm, ls, at) = (g(&MM_NS, m0), g(&LEASE_NS, l0), g(&ATTN_NS, a0));
+            p.matmul_s += mm;
+            p.lease_s += ls;
+            p.attention_s += at;
+            p.other_s += (t_all.elapsed().as_secs_f64() - mm - ls - at).max(0.0);
+        }
+        r
+    }
+
+    fn forward_chunk_inner(&mut self, tokens: &[u32]) -> Result<Vec<f32>, EngineError> {
         let (d, s_rows) = (self.n_embd, tokens.len());
         let pos0 = self.cached.len();
 
         let mut x = vec![0f32; s_rows * d];
         {
-            let lease = self.store.lease(self.embed_group)?;
+            let lease = self.lease(self.embed_group)?;
             for (s, &t) in tokens.iter().enumerate() {
                 if t as usize >= self.n_vocab {
                     return Err(EngineError::Other(format!("token id {t} out of range")));
@@ -306,7 +351,7 @@ impl Transformer {
             // ---- attention ----
             let attn_out = {
                 let lw = self.layers[l];
-                let lease = self.store.lease(lw.attn_group)?;
+                let lease = self.lease(lw.attn_group)?;
                 let h = self.rmsnorm(&x, &self.vec_of(&lease, lw.attn_norm), d);
                 let mut q = self.mm(&lease, lw.wq, &h);
                 let mut k = self.mm(&lease, lw.wk, &h);
@@ -335,7 +380,11 @@ impl Transformer {
                         self.v_cache[l][p * kvw + j] = half::f16::from_f32(v[s * kvw + j]);
                     }
                 }
+                let ta = std::time::Instant::now();
                 let ctx = self.attention(l, &q, pos0, s_rows);
+                if self.profile.is_some() {
+                    ATTN_NS.fetch_add(ta.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+                }
                 self.mm(&lease, lw.wo, &ctx)
             };
             x.iter_mut().zip(&attn_out).for_each(|(a, b)| *a += b);
@@ -343,7 +392,7 @@ impl Transformer {
             // ---- feed-forward (SwiGLU) ----
             let ffn_out = {
                 let lw = self.layers[l];
-                let lease = self.store.lease(lw.ffn_group)?;
+                let lease = self.lease(lw.ffn_group)?;
                 let h = self.rmsnorm(&x, &self.vec_of(&lease, lw.ffn_norm), d);
                 let mut g = self.mm(&lease, lw.gate, &h);
                 let u = self.mm(&lease, lw.up, &h);
@@ -358,11 +407,11 @@ impl Transformer {
         // Logits of the last row only.
         let last = &x[(s_rows - 1) * d..];
         let normed = {
-            let lease = self.store.lease(self.head_group)?;
+            let lease = self.lease(self.head_group)?;
             self.rmsnorm(last, &self.vec_of(&lease, self.out_norm), d)
         };
         let (og, ot) = self.output;
-        let lease = self.store.lease(og)?;
+        let lease = self.lease(og)?;
         Ok(self.mm(&lease, ot, &normed))
     }
 

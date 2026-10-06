@@ -53,6 +53,11 @@ fn compare(path: &Path, bin: &Path, prompt: &str, tol: f32) {
 /// Run Kestrel on `path` and llama.cpp on `reference` (the same weights,
 /// possibly pre-dequantized to F32).
 fn compare_with(path: &Path, reference: &Path, bin: &Path, prompt: &str, tol: f32) {
+    compare_mode(path, reference, bin, prompt, tol, true, true)
+}
+
+fn compare_mode(path: &Path, reference: &Path, bin: &Path, prompt: &str, tol: f32, exact: bool, check_greedy: bool) {
+    kestrel_engine::quant::set_exact(exact);
     let o = oracle(bin, reference, prompt, 8);
     let mut e = engine(path, false);
     let toks = e.tokenizer.encode(prompt, true, true);
@@ -61,7 +66,7 @@ fn compare_with(path: &Path, reference: &Path, bin: &Path, prompt: &str, tol: f3
     assert_eq!(logits.len(), o.logits.len());
     let scale = o.logits.iter().fold(0f32, |a, b| a.max(b.abs()));
     let maxdiff = logits.iter().zip(&o.logits).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
-    eprintln!("{}: max|Δlogit| = {maxdiff:.5} (scale {scale:.2})", path.file_name().unwrap().to_string_lossy());
+    eprintln!("{} [{}]: max|Δlogit| = {maxdiff:.5} (scale {scale:.2})", path.file_name().unwrap().to_string_lossy(), if exact { "exact" } else { "int8" });
     assert!(maxdiff <= tol * scale.max(1.0), "{}: logits differ by {maxdiff} (scale {scale})", path.display());
 
     // Greedy continuation: identical tokens.
@@ -72,7 +77,11 @@ fn compare_with(path: &Path, reference: &Path, bin: &Path, prompt: &str, tol: f3
         got.push(t);
         l = e.tf.forward(&[t]).unwrap();
     }
-    assert_eq!(got, o.greedy, "{}: greedy continuation differs", path.display());
+    if check_greedy {
+        assert_eq!(got, o.greedy, "{}: greedy continuation differs", path.display());
+    } else if got != o.greedy {
+        eprintln!("  note: greedy continuation differs from llama.cpp (near-tie under activation quantization): {got:?} vs {:?}", o.greedy);
+    }
 
     // Streaming everything from disk must be bit-identical to resident.
     let mut s = engine(path, true);
@@ -102,6 +111,11 @@ fn matches_llama_cpp() {
         let r = dir.join(format!("llama-bpe-{q}-deq.gguf"));
         if p.exists() && r.exists() {
             compare_with(&p, &r, &bin, prompt, 2e-3);
+            // Fast path: int8 activations, like llama.cpp; compare against
+            // llama.cpp on the quantized file itself.
+            if !matches!(q, "F16" | "BF16") {
+                compare_mode(&p, &p, &bin, prompt, 6e-2, false, false);
+            }
         } else {
             eprintln!("missing fixture {}", p.display());
         }

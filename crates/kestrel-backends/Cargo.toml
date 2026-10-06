@@ -1,7 +1,17 @@
 [package]
 name = "kestrel-backends"
+description = "Backends: plan → native session (Kestrel-owned residency) or plan → llama.cpp"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
+kestrel-gguf.workspace = true
+kestrel-hw.workspace = true
+kestrel-model.workspace = true
+kestrel-memory.workspace = true
+kestrel-planner.workspace = true
+kestrel-engine.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true

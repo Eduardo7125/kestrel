@@ -1,7 +1,16 @@
 [package]
 name = "kestrel-server"
+description = "OpenAI-compatible HTTP API over a Kestrel inference session"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
+kestrel-backends.workspace = true
+kestrel-engine.workspace = true
+axum.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true

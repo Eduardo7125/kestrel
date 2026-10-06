@@ -26,6 +26,25 @@ fn f16_at(b: &[u8], i: usize) -> f32 {
     f16(b[i], b[i + 1])
 }
 
+static EXACT: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(2);
+
+/// Use f32 activations everywhere (exact w.r.t. the dequantized weights)
+/// instead of the int8 fast path. Also enabled by `KESTREL_EXACT=1`.
+pub fn set_exact(on: bool) {
+    EXACT.store(on as u8, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn exact() -> bool {
+    match EXACT.load(std::sync::atomic::Ordering::Relaxed) {
+        2 => {
+            let on = std::env::var("KESTREL_EXACT").map(|v| v == "1").unwrap_or(false);
+            set_exact(on);
+            on
+        }
+        v => v == 1,
+    }
+}
+
 pub fn is_supported(t: GgmlType) -> bool {
     use GgmlType::*;
     matches!(t, F32 | F16 | BF16 | Q8_0 | Q4_0 | Q4_1 | Q5_0 | Q5_1 | Q4_K | Q5_K | Q6_K)
@@ -217,6 +236,35 @@ pub fn matmul(t: GgmlType, w: &[u8], rows: usize, cols: usize, x: &[f32], out: &
     // Work in tiles of output rows; each tile writes a disjoint column range
     // of `out` for every activation row, so collect per tile then scatter.
     const TILE: usize = 16;
+    if !exact() && crate::qdot::supports(t) && cols % 32 == 0 {
+        let qx: Vec<crate::qdot::Q8Row> = (0..s_rows).map(|s| crate::qdot::Q8Row::quantize(&x[s * cols..(s + 1) * cols])).collect();
+        let tiles: Vec<(usize, Vec<f32>)> = (0..rows.div_ceil(TILE))
+            .into_par_iter()
+            .map(|ti| {
+                let r0 = ti * TILE;
+                let r1 = (r0 + TILE).min(rows);
+                let mut res = vec![0f32; (r1 - r0) * s_rows];
+                let mut u = crate::qdot::Unpacked::default();
+                let fused = crate::qdot::has_fused(t);
+                for r in r0..r1 {
+                    let wr = &w[r * row_bytes..(r + 1) * row_bytes];
+                    if fused {
+                        for (s, q) in qx.iter().enumerate() {
+                            res[(r - r0) * s_rows + s] = crate::qdot::dot_fused(t, wr, q);
+                        }
+                    } else {
+                        crate::qdot::unpack(t, wr, cols, &mut u);
+                        for (s, q) in qx.iter().enumerate() {
+                            res[(r - r0) * s_rows + s] = crate::qdot::dot(&u, q);
+                        }
+                    }
+                }
+                (r0, res)
+            })
+            .collect();
+        scatter(tiles, s_rows, rows, out);
+        return;
+    }
     let tiles: Vec<(usize, Vec<f32>)> = (0..rows.div_ceil(TILE))
         .into_par_iter()
         .map(|ti| {
@@ -233,6 +281,10 @@ pub fn matmul(t: GgmlType, w: &[u8], rows: usize, cols: usize, x: &[f32], out: &
             (r0, res)
         })
         .collect();
+    scatter(tiles, s_rows, rows, out);
+}
+
+fn scatter(tiles: Vec<(usize, Vec<f32>)>, s_rows: usize, rows: usize, out: &mut [f32]) {
     for (r0, res) in tiles {
         let n = res.len() / s_rows;
         for i in 0..n {

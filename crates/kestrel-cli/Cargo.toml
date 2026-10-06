@@ -1,5 +1,6 @@
 [package]
 name = "kestrel-cli"
+description = "The kestrel command-line interface"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,3 +10,19 @@ name = "kestrel"
 path = "src/main.rs"
 
 [dependencies]
+kestrel-gguf.workspace = true
+kestrel-hw.workspace = true
+kestrel-model.workspace = true
+kestrel-memory.workspace = true
+kestrel-planner.workspace = true
+kestrel-engine.workspace = true
+kestrel-backends.workspace = true
+kestrel-server.workspace = true
+clap.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

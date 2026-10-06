@@ -6,7 +6,10 @@
 //! a performance competitor to llama.cpp's hand-tuned CPU kernels; benchmarks
 //! report both side by side.
 
+#[cfg(target_arch = "x86_64")]
+mod avx2;
 pub mod chat;
+pub mod qdot;
 pub mod quant;
 pub mod sampler;
 pub mod tokenizer;
@@ -15,7 +18,7 @@ mod transformer;
 pub use chat::{ChatMessage, ChatTemplate};
 pub use sampler::{Sampler, SamplerConfig};
 pub use tokenizer::{Tokenizer, Utf8Stream};
-pub use transformer::{check_support, EngineError, Transformer};
+pub use transformer::{check_support, EngineError, Profile, Transformer};
 
 use kestrel_gguf::GgufFile;
 use kestrel_memory::{Ledger, MetricsSnapshot, WeightStore};
@@ -43,6 +46,9 @@ pub struct GenStats {
     pub decode_tok_s: f64,
     pub stop_reason: String,
     pub memory: Option<MetricsSnapshot>,
+    /// Generated token ids (for output-equivalence checks).
+    #[serde(skip)]
+    pub tokens: Vec<u32>,
 }
 
 #[derive(Clone, Debug)]
@@ -50,6 +56,14 @@ pub struct GenParams {
     pub max_tokens: usize,
     pub sampler: SamplerConfig,
     pub stop: Vec<String>,
+    /// Keep generating past end-of-generation tokens (benchmarks).
+    pub ignore_eos: bool,
+}
+
+impl Default for GenParams {
+    fn default() -> Self {
+        GenParams { max_tokens: 256, sampler: SamplerConfig::default(), stop: Vec::new(), ignore_eos: false }
+    }
 }
 
 impl Engine {
@@ -105,11 +119,12 @@ impl Engine {
         stats.stop_reason = "length".into();
         for i in 0..budget {
             let tok = sampler.sample(&logits, &history);
-            if self.tokenizer.is_eog(tok) {
+            if self.tokenizer.is_eog(tok) && !params.ignore_eos {
                 stats.stop_reason = "stop".into();
                 break;
             }
             history.push(tok);
+            stats.tokens.push(tok);
             stats.generated += 1;
             let piece = utf8.push(&self.tokenizer.token_bytes(tok, false));
             if !piece.is_empty() {
