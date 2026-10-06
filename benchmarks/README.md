@@ -179,6 +179,35 @@ All Kestrel arms produce **identical output**.
      under the store lock: 50 ms per expert and a 17 s time-to-first-token.
      Large buffers now come from anonymous `mmap`: 100 µs per batch request.
 
+## 5. Dynamic reconfiguration and migration cost (1.1B Q4_K)
+
+3 interleaved runs × 64 tokens. Raw data: `results/syn-1b-q4k-adaptive.json`.
+
+| Arm | Decode tok/s | Peak RSS | Notes |
+|---|---|---|---|
+| `resident` | 9.24 [8.99-11.07] | 675 MB | |
+| `kestrel` (static plan, 50% of layers streamed) | 6.24 [6.19-6.41] | 460 MB | |
+| `adaptive` (same start, rebalancer free to use spare RAM) | **8.38** [7.82-9.42] | 730 MB | 30 groups promoted in the background during the run; ends fully resident |
+| `migration` (blocking promote/demote of every streamed group) | — | 676 MB | promote **6.0 ms per 9 MB group (1.51 GB/s)**, demote **0.8 ms** |
+
+* **Promotion is cheap and never stalls decode.** `promote_async` reserves
+  RAM and issues the read. The rebalancer installs completed promotions at
+  the next safe point, between tokens. Over 64 tokens the session moved from
+  the streaming plan to fully resident and ran at 91% of resident speed on
+  average.
+* **Demotion is close to free** (0.8 ms). It flips the placement and frees
+  the buffer when the last lease drops. Reads come from disk again from the
+  next token.
+* **Cost of the transition:** peak RSS during adaptation (730 MB) exceeds
+  both endpoints, because the ring buffers and newly promoted buffers coexist
+  until the ring is no longer needed. The guard counts this; a production
+  policy should shrink the ring as it promotes.
+* **One unexplained outlier:** a 7B migration run measured 13.6 MB/s
+  promotions right after a long streaming benchmark. Repeats measured
+  325 MB/s (in session) and 1-2 GB/s (isolated, `examples/promote.rs`). Cloud
+  virtual disks throttle after sustained bursts; this run cannot rule that
+  in or out.
+
 ## Research questions: status after these runs
 
 | RQ | Status |
@@ -190,7 +219,7 @@ All Kestrel arms produce **identical output**.
 | 12. When does streaming become counter-productive? | On this disk, beyond ~75% streamed, decode falls below a fifth of resident speed. The planner reports the disk bound in every plan that streams |
 | 2, 4, 5, 9, 10 | Need a GPU host |
 | 3 (MoE). Does prefetching help for experts? | Router lookahead: +11% decode, -30% stall, 31% more bytes read; host-dependent |
-| 7 | Migration cost: rebalancer implemented; not yet measured |
+| 7. How much does dynamic migration cost? | Promote 6 ms per 9 MB layer group (1.5 GB/s) in the background, demote 0.8 ms; adaptive decode went from streaming to fully resident within 64 tokens at 91% of resident speed |
 | 11. How predictable are MoE expert accesses? | One-layer-ahead router lookahead recalls 76% of experts on synthetic weights (uniform routing). Real-model routing traces are still needed |
 
 ## Minimum report for community datapoints

@@ -103,12 +103,18 @@ impl Rebalancer {
             }
             Pressure::Ok { spare } => {
                 self.calm += 1;
-                if self.allow_promotion && self.calm >= self.promote_after {
+                // Promotions load in the background and are installed here,
+                // at a safe point, so decode never waits for them.
+                if let Ok(done) = store.poll_promotions() {
+                    for g in done {
+                        actions.push(RebalanceAction::Promoted { group: g, bytes: store.group_buf_len(g) as u64 });
+                    }
+                }
+                if self.allow_promotion && self.calm >= self.promote_after && store.pending_promotions() == 0 {
                     if let Some(g) = self.pick(store, false) {
                         let bytes = store.group_buf_len(g) as u64;
                         // Keep a full group of headroom beyond the promoted one.
-                        if spare > 2 * bytes && store.ledger().available(Tier::Ram) >= bytes && store.promote(g).is_ok() {
-                            actions.push(RebalanceAction::Promoted { group: g, bytes });
+                        if spare > 2 * bytes && store.ledger().available(Tier::Ram) >= bytes && store.promote_async(g).unwrap_or(false) {
                             self.calm = 0;
                         }
                     }

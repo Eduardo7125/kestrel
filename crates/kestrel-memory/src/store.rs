@@ -183,6 +183,9 @@ struct State {
     clock: u64,
     /// Execution-order position of the most recently leased group.
     cur_pos: usize,
+    /// Background promotions: loading into a new buffer, installed by
+    /// `poll_promotions` at a safe point once complete.
+    pending: Vec<(usize, AlignedBuf, Reservation, Arc<Ticket>)>,
 }
 
 struct Inner {
@@ -337,7 +340,7 @@ impl WeightStore {
                 cfg,
                 io,
                 ledger,
-                state: Mutex::new(State { placement, slots, clock: 0, cur_pos: 0 }),
+                state: Mutex::new(State { placement, slots, clock: 0, cur_pos: 0, pending: Vec::new() }),
                 metrics: StoreMetrics::default(),
             }),
         })
@@ -521,17 +524,69 @@ impl WeightStore {
 
     /// Promote a streamed group to resident RAM. Blocks until loaded.
     pub fn promote(&self, group: usize) -> Result<(), StoreError> {
-        let inner = &self.inner;
-        if self.is_resident(group) {
+        if !self.promote_async(group)? {
             return Ok(());
+        }
+        let t = {
+            let st = self.inner.state.lock().unwrap();
+            st.pending.iter().find(|p| p.0 == group).map(|p| p.3.clone())
+        };
+        if let Some(t) = t {
+            t.wait().map_err(StoreError::Io)?;
+        }
+        self.poll_promotions()?;
+        Ok(())
+    }
+
+    /// Start promoting a streamed group in the background: the buffer is
+    /// reserved and the load issued, but decode keeps streaming the group
+    /// until [`poll_promotions`](Self::poll_promotions) installs it. Returns
+    /// false if the group is already resident or pending.
+    pub fn promote_async(&self, group: usize) -> Result<bool, StoreError> {
+        let inner = &self.inner;
+        {
+            let st = inner.state.lock().unwrap();
+            if !matches!(st.placement[group], Placement::Streamed) || st.pending.iter().any(|p| p.0 == group) {
+                return Ok(false);
+            }
         }
         let layout = &inner.layouts[group];
         let r = inner.ledger.reserve(Tier::Ram, layout.buf_len as u64, "weights")?;
         let mut buf = AlignedBuf::new(layout.buf_len, DIRECT_ALIGN).map_err(|e| StoreError::Io(e.to_string()))?;
         let t = layout.issue(&inner.io, &inner.file, &mut buf);
-        t.wait().map_err(StoreError::Io)?;
+        inner.state.lock().unwrap().pending.push((group, buf, r, t));
+        Ok(true)
+    }
+
+    /// Install completed background promotions. Call at safe points.
+    /// Returns the groups installed.
+    pub fn poll_promotions(&self) -> Result<Vec<usize>, StoreError> {
+        let inner = &self.inner;
         let mut st = inner.state.lock().unwrap();
-        st.placement[group] = Placement::Resident(Arc::new(GroupBuf { buf, _res: r }));
+        let mut done = Vec::new();
+        let mut i = 0;
+        while i < st.pending.len() {
+            if !st.pending[i].3.is_done() {
+                i += 1;
+                continue;
+            }
+            let (group, buf, r, t) = st.pending.swap_remove(i);
+            t.wait().map_err(StoreError::Io)?;
+            st.placement[group] = Placement::Resident(Arc::new(GroupBuf { buf, _res: r }));
+            done.push(group);
+        }
+        for &group in &done {
+            Self::install_cleanup(&mut st, group);
+            inner.metrics.promotions.fetch_add(1, Relaxed);
+        }
+        Ok(done)
+    }
+
+    pub fn pending_promotions(&self) -> usize {
+        self.inner.state.lock().unwrap().pending.len()
+    }
+
+    fn install_cleanup(st: &mut State, group: usize) {
         // A ring copy is now redundant; free the slot for others.
         for s in st.slots.iter_mut() {
             if s.group == Some(group) && s.leases == 0 && s.ticket.as_ref().is_none_or(|t| t.is_done()) {
@@ -540,8 +595,6 @@ impl WeightStore {
                 s.prefetched = false;
             }
         }
-        inner.metrics.promotions.fetch_add(1, Relaxed);
-        Ok(())
     }
 
     /// Demote a resident group to streamed. Its buffer (and RAM reservation)
@@ -796,9 +849,19 @@ mod rebalance_tests {
         // Calm for `promote_after` ticks with plenty of headroom: promote one back.
         ledger.set_limit(Tier::Ram, limit0);
         let calm = MemSample { rss: 1 << 20, available: 8 << 30 };
+        // Promotion is asynchronous: started after `promote_after` calm ticks,
+        // installed on a later tick once its load completes. Reads stay
+        // correct while it is pending.
         let mut promoted = false;
-        for _ in 0..r.promote_after {
+        for _ in 0..r.promote_after + 50 {
             promoted |= r.tick(&store, calm).iter().any(|a| matches!(a, RebalanceAction::Promoted { .. }));
+            if promoted {
+                break;
+            }
+            for g in 0..n {
+                check(&store, &m, &raw, g);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert!(promoted);
         for g in 0..n {

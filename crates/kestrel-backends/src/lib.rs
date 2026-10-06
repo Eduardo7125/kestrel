@@ -130,6 +130,17 @@ impl NativeSession {
         })
     }
 
+    /// Tune the rebalancer: check every `interval` tokens, promote after
+    /// `promote_after` calm checks, and allow `rss_limit` bytes of RSS.
+    pub fn configure_rebalancer(&mut self, interval: usize, promote_after: u32, rss_limit: u64) {
+        self.rebalance_interval = interval.max(1);
+        if let Some(r) = self.rebalancer.as_mut() {
+            r.promote_after = promote_after;
+            r.guard.rss_limit = rss_limit;
+            r.allow_promotion = true;
+        }
+    }
+
     pub fn rebalance_now(&mut self) -> Vec<RebalanceAction> {
         let (Some(r), Some(s)) = (self.rebalancer.as_mut(), MemSample::now()) else { return Vec::new() };
         let acts = r.tick(&self.store, s);

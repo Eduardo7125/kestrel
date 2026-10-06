@@ -320,6 +320,9 @@ fn run_arm(a: &BenchArgs, arm: &str) -> Result<ArmRun> {
         plan.store.policy = if arm == "lru-cache" { RingPolicy::Lru } else { RingPolicy::Belady };
         note = format!("all layers through a {slots}-slot {:?} cache of the same RAM", plan.store.policy);
     }
+    if arm == "adaptive" {
+        note = "starts at the streaming plan; rebalancer promotes in the background as RAM allows".into();
+    }
     if plan.placement == PlacementOrder::Contiguous {
         note = "streamed layers contiguous".into();
     }
@@ -327,7 +330,14 @@ fn run_arm(a: &BenchArgs, arm: &str) -> Result<ArmRun> {
     let ram_budget = plan.budgets.ram.usable;
     let m = std::sync::Arc::new(m);
     let cache0 = meminfo_cached();
-    let mut sess = NativeSession::load(plan, &g, m.clone(), NativeOptions { adaptive: false, ..o.native_options() })?;
+    let mut sess = NativeSession::load(plan, &g, m.clone(), NativeOptions { adaptive: arm == "adaptive", ..o.native_options() })?;
+    if arm == "adaptive" {
+        // Start from the streaming plan, then let the rebalancer use the
+        // RAM this machine actually has: promotions load in the background
+        // and are installed between tokens.
+        sess.ledger.set_limit(Tier::Ram, u64::MAX / 4);
+        sess.configure_rebalancer(2, 1, kestrel_hw::HardwareProfile::discover(&[]).ram.total * 3 / 4);
+    }
     let load_s = sess.load_s;
 
     // A deterministic prompt of roughly the requested length.
@@ -341,6 +351,37 @@ fn run_arm(a: &BenchArgs, arm: &str) -> Result<ArmRun> {
     let temp = a.temperature.unwrap_or(if m.moe.is_some() { 1.0 } else { 0.0 });
     let sampler = if temp > 0.0 { SamplerConfig { temperature: temp, top_k: 0, top_p: 1.0, min_p: 0.0, repeat_penalty: 1.0, repeat_last_n: 0, seed: 42 } } else { SamplerConfig::greedy() };
     let params = GenParams { max_tokens: a.tokens, sampler, ignore_eos: true, ..Default::default() };
+    if arm == "migration" {
+        // RQ 7: cost of moving groups between tiers at runtime. Promote every
+        // streamed group (disk → RAM, blocking), then demote them again,
+        // timing each; then decode with everything resident.
+        let streamed: Vec<usize> = (0..sess.store.model().groups.len())
+            .filter(|&g| !sess.store.is_resident(g) && !sess.store.is_external(g))
+            .collect();
+        // This arm measures transfer cost, not budgeting: lift the ceiling.
+        sess.ledger.set_limit(Tier::Ram, u64::MAX / 4);
+        let (mut p_bytes, mut p_s, mut d_s) = (0u64, 0f64, 0f64);
+        for &g in &streamed {
+            let t = std::time::Instant::now();
+            sess.store.promote(g)?;
+            p_s += t.elapsed().as_secs_f64();
+            p_bytes += sess.store.group_buf_len(g) as u64;
+        }
+        let promoted = sess.generate(&toks, &params, &mut |_| true)?;
+        for &g in &streamed {
+            let t = std::time::Instant::now();
+            sess.store.demote(g)?;
+            d_s += t.elapsed().as_secs_f64();
+        }
+        note = format!(
+            "{} groups promoted: {:.1} ms each ({}/s), demoted: {:.3} ms each; decode after promotion {:.2} tok/s",
+            streamed.len(),
+            p_s * 1e3 / streamed.len().max(1) as f64,
+            gb((p_bytes as f64 / p_s.max(1e-9)) as u64),
+            d_s * 1e3 / streamed.len().max(1) as f64,
+            promoted.decode_tok_s
+        );
+    }
     let st = sess.generate(&toks, &params, &mut |_| true)?;
     let mem = st.memory.clone().unwrap_or_default();
     let mut h: u64 = 0xcbf29ce484222325;
@@ -371,7 +412,7 @@ fn run_arm(a: &BenchArgs, arm: &str) -> Result<ArmRun> {
         late_fraction: mem.late_fraction,
         page_cache_growth: meminfo_cached() - cache0,
         output_hash: format!("{h:016x}"),
-        note,
+        note: if arm == "adaptive" { format!("{note}; {} promotions during the run", sess.totals.rebalance.len()) } else { note },
         expert_hit_rate: st.experts.as_ref().map(|e| e.hit_rate),
         lookahead_recall: st.experts.as_ref().filter(|e| e.lookahead_predicted > 0).map(|e| e.lookahead_recall),
         expert_bytes: st.experts.as_ref().map(|e| e.bytes_read),

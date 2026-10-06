@@ -1,0 +1,23 @@
+model synthetic-1b-Q4_K · 636.0 MB weights (545.4 MB in layers) · streaming arms: RAM budget 710.1 MB (~50% of layer bytes streamed)
+arms: resident, kestrel, adaptive, migration  ·  runs: 3 (interleaved)  ·  64 tokens
+  run 1 resident      decode   11.07 tok/s · prefill    46.7 tok/s · peak RSS  674.9 MB · hit  100% · stall   0.00s
+  run 1 kestrel       decode    6.24 tok/s · prefill    40.2 tok/s · peak RSS  459.8 MB · hit   81% · stall   2.63s
+  run 1 adaptive      decode    9.42 tok/s · prefill    41.9 tok/s · peak RSS  730.4 MB · hit   98% · stall   0.29s
+  run 1 migration     decode    5.94 tok/s · prefill     5.7 tok/s · peak RSS  675.2 MB · hit   82% · stall   3.11s
+  run 2 resident      decode    9.24 tok/s · prefill    44.3 tok/s · peak RSS  675.2 MB · hit  100% · stall   0.00s
+  run 2 kestrel       decode    6.19 tok/s · prefill    45.0 tok/s · peak RSS  460.0 MB · hit   82% · stall   2.52s
+  run 2 adaptive      decode    7.82 tok/s · prefill    42.1 tok/s · peak RSS  730.3 MB · hit   97% · stall   0.32s
+  run 2 migration     decode    4.89 tok/s · prefill     4.6 tok/s · peak RSS  675.0 MB · hit   78% · stall   4.92s
+  run 3 resident      decode    8.99 tok/s · prefill    41.8 tok/s · peak RSS  674.6 MB · hit  100% · stall   0.00s
+  run 3 kestrel       decode    6.41 tok/s · prefill    42.1 tok/s · peak RSS  460.0 MB · hit   82% · stall   2.04s
+  run 3 adaptive      decode    8.38 tok/s · prefill    42.3 tok/s · peak RSS  729.3 MB · hit   97% · stall   0.40s
+  run 3 migration     decode    5.16 tok/s · prefill     4.9 tok/s · peak RSS  675.6 MB · hit   78% · stall   4.21s
+
+ARM            decode tok/s  prefill t/s   peak RSS  streamed/t     hit stall/tok    disk BW  prefetch  output
+resident        9.24 [8.99-11.07]         44.3   675.2 MB         0 B    100%    0.000s      0 B/s        0%  identical
+kestrel         6.24 [6.19-6.41]         42.1   460.0 MB    272.7 MB     82%    0.039s  3.44 GB/s      100%  identical
+adaptive        8.38 [7.82-9.42]         42.1   730.4 MB         0 B     97%    0.005s  4.73 GB/s      100%  identical
+               note: starts at the streaming plan; rebalancer promotes in the background as RAM allows; 30 promotions during the run
+migration       5.16 [4.89-5.94]          4.9   675.6 MB    272.7 MB     78%    0.066s  2.51 GB/s      100%  identical
+               note: 30 groups promoted: 6.0 ms each (1.51 GB/s), demoted: 0.810 ms each; decode after promotion 10.38 tok/s
+raw results → benchmarks/results/syn-1b-q4k-adaptive.json
