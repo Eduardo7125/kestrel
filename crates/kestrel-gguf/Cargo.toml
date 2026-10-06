@@ -1,0 +1,13 @@
+[package]
+name = "kestrel-gguf"
+description = "GGUF parser: metadata, tensor table and ggml type layout, without reading weights"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

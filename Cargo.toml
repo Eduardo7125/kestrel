@@ -1,0 +1,47 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/eduardo7125/kestrel"
+rust-version = "1.80"
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+rayon = "1.10"
+libc = "0.2"
+clap = { version = "4", features = ["derive"] }
+half = "2"
+fancy-regex = "0.14"
+minijinja = { version = "2", features = ["builtins", "json", "loop_controls"] }
+axum = "0.8"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal", "sync"] }
+tokio-stream = "0.1"
+tempfile = "3"
+
+kestrel-gguf = { path = "crates/kestrel-gguf" }
+kestrel-hw = { path = "crates/kestrel-hw" }
+kestrel-model = { path = "crates/kestrel-model" }
+kestrel-memory = { path = "crates/kestrel-memory" }
+kestrel-planner = { path = "crates/kestrel-planner" }
+kestrel-engine = { path = "crates/kestrel-engine" }
+kestrel-backends = { path = "crates/kestrel-backends" }
+kestrel-server = { path = "crates/kestrel-server" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+debug = 1
+
+# Kernels are unusably slow without optimization; keep tests fast.
+[profile.dev.package."*"]
+opt-level = 2
+[profile.dev]
+opt-level = 1

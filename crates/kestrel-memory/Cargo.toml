@@ -1,0 +1,16 @@
+[package]
+name = "kestrel-memory"
+description = "Memory orchestration: budgets, tiered weight store, streaming I/O, prefetch, caches, metrics"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+kestrel-hw.workspace = true
+kestrel-model.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+kestrel-gguf.workspace = true
+tempfile.workspace = true
