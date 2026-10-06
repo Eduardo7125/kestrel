@@ -222,3 +222,125 @@ mod tests {
         }
     }
 }
+
+/// `res[r * s_rows + s] = w[r] · x[s]` for f32 rows of length `cols`
+/// (a multiple of 8). Register-blocked 3 weight rows × 4 activation rows so
+/// each loaded vector feeds several FMAs; remainders fall back to 1×1.
+#[target_feature(enable = "avx2,fma")]
+pub unsafe fn gemm_f32(w: &[f32], rows: usize, x: &[f32], s_rows: usize, cols: usize, res: &mut [f32]) {
+    debug_assert_eq!(cols % 8, 0);
+    let wp = w.as_ptr();
+    let xp = x.as_ptr();
+    let rows3 = rows / 3 * 3;
+    // Outer loop over activation blocks (kept in L1), inner over the weight
+    // tile (kept in L2).
+    let mut s = 0;
+    while s + 4 <= s_rows {
+        let (x0, x1, x2, x3) = (xp.add(s * cols), xp.add((s + 1) * cols), xp.add((s + 2) * cols), xp.add((s + 3) * cols));
+        let mut r = 0;
+        while r < rows3 {
+            let mut acc = [_mm256_setzero_ps(); 12];
+            let (w0, w1, w2) = (wp.add(r * cols), wp.add((r + 1) * cols), wp.add((r + 2) * cols));
+            let mut c = 0;
+            while c < cols {
+                let a0 = _mm256_loadu_ps(w0.add(c));
+                let a1 = _mm256_loadu_ps(w1.add(c));
+                let a2 = _mm256_loadu_ps(w2.add(c));
+                let b = _mm256_loadu_ps(x0.add(c));
+                acc[0] = _mm256_fmadd_ps(a0, b, acc[0]);
+                acc[1] = _mm256_fmadd_ps(a1, b, acc[1]);
+                acc[2] = _mm256_fmadd_ps(a2, b, acc[2]);
+                let b = _mm256_loadu_ps(x1.add(c));
+                acc[3] = _mm256_fmadd_ps(a0, b, acc[3]);
+                acc[4] = _mm256_fmadd_ps(a1, b, acc[4]);
+                acc[5] = _mm256_fmadd_ps(a2, b, acc[5]);
+                let b = _mm256_loadu_ps(x2.add(c));
+                acc[6] = _mm256_fmadd_ps(a0, b, acc[6]);
+                acc[7] = _mm256_fmadd_ps(a1, b, acc[7]);
+                acc[8] = _mm256_fmadd_ps(a2, b, acc[8]);
+                let b = _mm256_loadu_ps(x3.add(c));
+                acc[9] = _mm256_fmadd_ps(a0, b, acc[9]);
+                acc[10] = _mm256_fmadd_ps(a1, b, acc[10]);
+                acc[11] = _mm256_fmadd_ps(a2, b, acc[11]);
+                c += 8;
+            }
+            for si in 0..4 {
+                for ri in 0..3 {
+                    res[(r + ri) * s_rows + s + si] = hsum(acc[si * 3 + ri]);
+                }
+            }
+            r += 3;
+        }
+        for r in rows3..rows {
+            for si in 0..4 {
+                res[r * s_rows + s + si] = dot_f32(wp.add(r * cols), xp.add((s + si) * cols), cols);
+            }
+        }
+        s += 4;
+    }
+    for s in s..s_rows {
+        for r in 0..rows {
+            res[r * s_rows + s] = dot_f32(wp.add(r * cols), xp.add(s * cols), cols);
+        }
+    }
+}
+
+#[target_feature(enable = "avx2,fma")]
+pub unsafe fn dot_f32(a: *const f32, b: *const f32, n: usize) -> f32 {
+    let mut acc0 = _mm256_setzero_ps();
+    let mut acc1 = _mm256_setzero_ps();
+    let mut c = 0;
+    while c + 16 <= n {
+        acc0 = _mm256_fmadd_ps(_mm256_loadu_ps(a.add(c)), _mm256_loadu_ps(b.add(c)), acc0);
+        acc1 = _mm256_fmadd_ps(_mm256_loadu_ps(a.add(c + 8)), _mm256_loadu_ps(b.add(c + 8)), acc1);
+        c += 16;
+    }
+    while c + 8 <= n {
+        acc0 = _mm256_fmadd_ps(_mm256_loadu_ps(a.add(c)), _mm256_loadu_ps(b.add(c)), acc0);
+        c += 8;
+    }
+    let mut s = hsum(_mm256_add_ps(acc0, acc1));
+    while c < n {
+        s += *a.add(c) * *b.add(c);
+        c += 1;
+    }
+    s
+}
+
+#[cfg(test)]
+mod gemm_tests {
+    #[test]
+    fn gemm_matches_naive() {
+        if !(std::is_x86_feature_detected!("avx2") && std::is_x86_feature_detected!("fma")) {
+            return;
+        }
+        for (rows, s_rows, cols) in [(7, 9, 64), (3, 4, 8), (1, 1, 24), (10, 3, 256)] {
+            let w: Vec<f32> = (0..rows * cols).map(|i| ((i * 7 % 13) as f32 - 6.0) * 0.1).collect();
+            let x: Vec<f32> = (0..s_rows * cols).map(|i| ((i * 5 % 11) as f32 - 5.0) * 0.2).collect();
+            let mut res = vec![0f32; rows * s_rows];
+            unsafe { super::gemm_f32(&w, rows, &x, s_rows, cols, &mut res) };
+            for r in 0..rows {
+                for s in 0..s_rows {
+                    let e: f32 = (0..cols).map(|c| w[r * cols + c] * x[s * cols + c]).sum();
+                    assert!((res[r * s_rows + s] - e).abs() < 1e-3, "{rows}x{s_rows}x{cols} r{r} s{s}");
+                }
+            }
+        }
+    }
+}
+
+/// f16 → f32 conversion, 8 values per instruction (F16C).
+#[target_feature(enable = "avx2,f16c")]
+pub unsafe fn f16_to_f32(src: &[u16], dst: &mut [f32]) {
+    let n = src.len().min(dst.len());
+    let mut i = 0;
+    while i + 8 <= n {
+        let h = _mm_loadu_si128(src.as_ptr().add(i) as *const __m128i);
+        _mm256_storeu_ps(dst.as_mut_ptr().add(i), _mm256_cvtph_ps(h));
+        i += 8;
+    }
+    while i < n {
+        dst[i] = half::f16::from_bits(src[i]).to_f32();
+        i += 1;
+    }
+}

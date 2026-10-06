@@ -218,7 +218,7 @@ impl Transformer {
             cached: Vec::new(),
             pool,
             _kv_res: kv_res,
-            n_batch: 64,
+            n_batch: 256,
             profile: std::env::var("KESTREL_PROFILE").ok().filter(|v| v == "1").map(|_| Profile::default()),
             model,
             store,
@@ -416,38 +416,41 @@ impl Transformer {
     }
 
     /// Causal GQA attention for `s_rows` new queries at positions `pos0..`.
+    /// The layer's K/V history is converted to f32 once per call, then every
+    /// (query, head) pair runs SIMD dot products over it.
     fn attention(&self, l: usize, q: &[f32], pos0: usize, s_rows: usize) -> Vec<f32> {
         let (hd, nh, nkv) = (self.hd, self.n_head, self.n_kv);
         let group = nh / nkv;
         let scale = 1.0 / (hd as f32).sqrt();
-        let (kc, vc) = (&self.k_cache[l], &self.v_cache[l]);
         let kvw = nkv * hd;
+        let n_tot = pos0 + s_rows;
+        let as_bits = |v: &[half::f16]| -> &[u16] {
+            // SAFETY: half::f16 is repr(transparent) over u16.
+            unsafe { std::slice::from_raw_parts(v.as_ptr() as *const u16, v.len()) }
+        };
+        let mut kf = vec![0f32; n_tot * kvw];
+        let mut vf = vec![0f32; n_tot * kvw];
+        kf.par_chunks_mut(kvw * 64).zip(as_bits(&self.k_cache[l][..n_tot * kvw]).par_chunks(kvw * 64)).for_each(|(d, s)| quant::f16_slice_to_f32(s, d));
+        vf.par_chunks_mut(kvw * 64).zip(as_bits(&self.v_cache[l][..n_tot * kvw]).par_chunks(kvw * 64)).for_each(|(d, s)| quant::f16_slice_to_f32(s, d));
         let mut out = vec![0f32; s_rows * nh * hd];
         out.par_chunks_mut(hd).enumerate().for_each(|(i, o)| {
             let (s, h) = (i / nh, i % nh);
             let kvh = h / group;
             let qv = &q[(s * nh + h) * hd..][..hd];
             let n = pos0 + s + 1;
-            let mut scores = Vec::with_capacity(n);
-            let mut kbuf = vec![0f32; hd];
-            for p in 0..n {
-                let kr = &kc[p * kvw + kvh * hd..][..hd];
-                for (a, b) in kbuf.iter_mut().zip(kr) {
-                    *a = b.to_f32();
-                }
-                scores.push(quant::dot(qv, &kbuf) * scale);
-            }
+            let mut scores: Vec<f32> = (0..n).map(|p| quant::dot(qv, &kf[p * kvw + kvh * hd..][..hd]) * scale).collect();
             let m = scores.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
             let mut sum = 0.0;
             for sc in scores.iter_mut() {
                 *sc = (*sc - m).exp();
                 sum += *sc;
             }
+            let inv = 1.0 / sum;
             for (p, &w) in scores.iter().enumerate() {
-                let w = w / sum;
-                let vr = &vc[p * kvw + kvh * hd..][..hd];
+                let w = w * inv;
+                let vr = &vf[p * kvw + kvh * hd..][..hd];
                 for (a, b) in o.iter_mut().zip(vr) {
-                    *a += w * b.to_f32();
+                    *a += w * b;
                 }
             }
         });

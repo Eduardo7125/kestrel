@@ -236,6 +236,28 @@ pub fn matmul(t: GgmlType, w: &[u8], rows: usize, cols: usize, x: &[f32], out: &
     // Work in tiles of output rows; each tile writes a disjoint column range
     // of `out` for every activation row, so collect per tile then scatter.
     const TILE: usize = 16;
+    // Batched rows (prefill): dequantize a tile of weight rows to f32 once
+    // and run a register-blocked FMA GEMM. Exact arithmetic on the weights.
+    #[cfg(target_arch = "x86_64")]
+    if s_rows >= 4 && cols % 8 == 0 && std::is_x86_feature_detected!("avx2") && std::is_x86_feature_detected!("fma") {
+        const GT: usize = 48;
+        let tiles: Vec<(usize, Vec<f32>)> = (0..rows.div_ceil(GT))
+            .into_par_iter()
+            .map(|ti| {
+                let r0 = ti * GT;
+                let r1 = (r0 + GT).min(rows);
+                let mut wf = vec![0f32; (r1 - r0) * cols];
+                for r in r0..r1 {
+                    dequant_row(t, &w[r * row_bytes..(r + 1) * row_bytes], &mut wf[(r - r0) * cols..(r - r0 + 1) * cols]);
+                }
+                let mut res = vec![0f32; (r1 - r0) * s_rows];
+                unsafe { crate::avx2::gemm_f32(&wf, r1 - r0, x, s_rows, cols, &mut res) };
+                (r0, res)
+            })
+            .collect();
+        scatter(tiles, s_rows, rows, out);
+        return;
+    }
     if !exact() && crate::qdot::supports(t) && cols.is_multiple_of(32) {
         let qx: Vec<crate::qdot::Q8Row> = (0..s_rows).map(|s| crate::qdot::Q8Row::quantize(&x[s * cols..(s + 1) * cols])).collect();
         let tiles: Vec<(usize, Vec<f32>)> = (0..rows.div_ceil(TILE))
@@ -364,5 +386,17 @@ mod tests {
                 assert!((out[si * rows + r] - e).abs() < 1e-3);
             }
         }
+    }
+}
+
+/// Convert f16 bits to f32 (F16C when available).
+pub fn f16_slice_to_f32(src: &[u16], dst: &mut [f32]) {
+    #[cfg(target_arch = "x86_64")]
+    if std::is_x86_feature_detected!("f16c") && std::is_x86_feature_detected!("avx2") {
+        unsafe { crate::avx2::f16_to_f32(src, dst) };
+        return;
+    }
+    for (d, &h) in dst.iter_mut().zip(src) {
+        *d = f16((h & 0xff) as u8, (h >> 8) as u8);
     }
 }
