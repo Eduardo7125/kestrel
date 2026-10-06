@@ -142,12 +142,29 @@ pub struct Overrides {
     /// Do not load or save the expert usage history (MoE warm start).
     #[arg(long)]
     pub no_usage_history: bool,
+    /// Ignore a saved `kestrel benchmark --tune` profile.
+    #[arg(long)]
+    pub no_tune_profile: bool,
     /// Skip the automatic first-run hardware benchmark.
     #[arg(long)]
     pub no_bench: bool,
 }
 
 impl Overrides {
+    /// Like [`request`](Self::request), but fills unset knobs from a saved
+    /// tuning profile for this machine and model.
+    pub fn request_with(&self, model: &ModelDesc, hw: &HardwareProfile) -> Result<PlanRequest> {
+        let mut req = self.request(model)?;
+        if !self.no_tune_profile {
+            if let Some(t) = TunedProfile::load(hw, model) {
+                req.prefetch_depth = req.prefetch_depth.or(Some(t.prefetch_depth));
+                req.io_workers = req.io_workers.or(Some(t.io_workers));
+                req.threads = req.threads.or(Some(t.threads));
+            }
+        }
+        Ok(req)
+    }
+
     pub fn request(&self, model: &ModelDesc) -> Result<PlanRequest> {
         let kv_type = match self.kv_type.to_ascii_lowercase().as_str() {
             "f16" => GgmlType::F16,
@@ -336,4 +353,30 @@ pub fn open_model(arg: &str) -> Result<(kestrel_gguf::GgufFile, ModelDesc)> {
 
 pub fn gb(x: u64) -> String {
     fmt_bytes(x)
+}
+
+/// A measured execution profile from `kestrel benchmark --tune`, keyed by
+/// machine and model fingerprints so it is never applied elsewhere.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct TunedProfile {
+    pub prefetch_depth: usize,
+    pub io_workers: usize,
+    pub threads: usize,
+    pub baseline_tok_s: f64,
+    pub tuned_tok_s: f64,
+    pub when: u64,
+}
+
+impl TunedProfile {
+    pub fn path(hw: &HardwareProfile, model: &ModelDesc) -> PathBuf {
+        kestrel_hw::cache_dir().join("tuning").join(format!("{}-{}.json", hw.fingerprint, model.fingerprint))
+    }
+    pub fn load(hw: &HardwareProfile, model: &ModelDesc) -> Option<Self> {
+        serde_json::from_str(&std::fs::read_to_string(Self::path(hw, model)).ok()?).ok()
+    }
+    pub fn save(&self, hw: &HardwareProfile, model: &ModelDesc) -> std::io::Result<()> {
+        let p = Self::path(hw, model);
+        std::fs::create_dir_all(p.parent().unwrap())?;
+        std::fs::write(p, serde_json::to_string_pretty(self).unwrap())
+    }
 }

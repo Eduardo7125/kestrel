@@ -258,7 +258,7 @@ fn cmd_hardware(bench: bool, path: Option<std::path::PathBuf>, json: bool) -> Re
 fn make_plan(arg: &str, o: &Overrides, quiet: bool) -> Result<(kestrel_gguf::GgufFile, Arc<kestrel_model::ModelDesc>, kestrel_planner::ExecutionPlan)> {
     let (g, m) = common::open_model(arg)?;
     let hw = common::hardware(Some(&m), o.no_bench, quiet);
-    let req = o.request(&m)?;
+    let req = o.request_with(&m, &hw)?;
     match kestrel_planner::plan(&m, &hw, &req) {
         Ok(p) => Ok((g, Arc::new(m), p)),
         Err(inf) => {

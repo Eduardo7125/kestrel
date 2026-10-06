@@ -184,12 +184,17 @@ still has the bytes.
 
 ## 6. Autotuning (Phase 7+)
 
-*(Planned; not implemented in the MVP.)* `kestrel benchmark --tune` would run short decode trials over a bounded candidate
+`kestrel benchmark --tune` runs short decode trials over a bounded candidate
 set: prefetch depth, I/O mode (direct/buffered), I/O workers, compute threads,
 and placement order. Each candidate must produce **bit-identical greedy tokens**
 to the baseline, and is kept only if median tok/s improves by ≥ 3% (Colibrì's
-`coli tune` gate). Results are cached per (hardware fingerprint, model
-fingerprint).
+`coli tune` gate). The search is coordinate descent over threads, prefetch
+depth and I/O workers. The streaming axes are skipped when the plan keeps
+every weight resident. A winner is rerun before the baseline (reverse order)
+and kept only if it still wins. Profiles live in
+`~/.cache/kestrel/tuning/<hardware>-<model>.json`. `run`, `serve` and `plan`
+apply them unless a flag sets the knob explicitly; `--no-tune-profile`
+ignores them.
 
 ## 7. Multi-GPU (Phase 9)
 

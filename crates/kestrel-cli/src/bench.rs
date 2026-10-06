@@ -50,6 +50,14 @@ pub struct BenchArgs {
     pub single_arm: Option<String>,
     #[arg(long, hide = true)]
     pub ram_budget_bytes: Option<u64>,
+    /// Measure prefetch depth, I/O workers and thread count on this model
+    /// and save the winner (applied by `run`/`serve`/`plan` unless overridden).
+    #[arg(long)]
+    pub tune: bool,
+    #[arg(long, hide = true)]
+    pub prefetch_override: Option<usize>,
+    #[arg(long, hide = true)]
+    pub io_workers_override: Option<usize>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -105,6 +113,9 @@ const NATIVE_ARMS: &[&str] = &["resident", "kestrel", "no-prefetch", "page-cache
 const MOE_ARMS: &[&str] = &["resident", "kestrel", "lookahead-always", "no-lookahead", "lru-experts"];
 
 pub fn run(a: BenchArgs) -> Result<()> {
+    if a.tune && a.single_arm.is_none() {
+        return tune(&a);
+    }
     if let Some(arm) = a.single_arm.clone() {
         let r = run_arm(&a, &arm)?;
         println!("KESTREL_ARM_RESULT {}", serde_json::to_string(&r)?);
@@ -271,7 +282,8 @@ fn summarize(results: &[ArmRun], arms: &[String]) {
 fn run_arm(a: &BenchArgs, arm: &str) -> Result<ArmRun> {
     let (g, m) = common::open_model(&a.model)?;
     let budget = a.ram_budget_bytes.context("--ram-budget-bytes")?;
-    let streaming = arm != "resident";
+    // "planned": the plan Kestrel would choose on its own (used by --tune).
+    let streaming = !matches!(arm, "resident" | "planned");
     let o = Overrides {
         backend: common::BackendArg::Native,
         ctx: Some(512),
@@ -280,15 +292,16 @@ fn run_arm(a: &BenchArgs, arm: &str) -> Result<ArmRun> {
         kv_cache: None,
         kv_type: "f16".into(),
         disk_cache: None,
-        prefetch_depth: Some(match arm {
+        prefetch_depth: Some(a.prefetch_override.unwrap_or(match arm {
             "no-prefetch" | "page-cache" | "lru-cache" => 0,
             _ => 2,
-        }),
+        })),
         io: Some(if arm == "page-cache" { common::IoArg::Buffered } else { common::IoArg::Direct }),
-        io_workers: None,
+        io_workers: a.io_workers_override,
         policy: if arm == "lru-cache" { common::PolicyArg::Lru } else { common::PolicyArg::Belady },
         strategy: None,
         no_stream: arm == "resident",
+        no_tune_profile: true,
         placement: if arm == "contiguous" { common::PlacementArg::Contiguous } else { common::PlacementArg::Interleaved },
         threads: a.threads,
         allow_overcommit: streaming,
@@ -466,4 +479,116 @@ fn llamacpp_arm(bin: &std::path::Path, model: &str, arm: &str, a: &BenchArgs, ru
         lookahead_recall: None,
         expert_bytes: None,
     })
+}
+
+/// One child-process trial of the planned configuration with knob overrides.
+fn trial(a: &BenchArgs, model: &std::path::Path, threads: usize, prefetch: usize, io_workers: usize) -> Result<ArmRun> {
+    let exe = std::env::current_exe()?;
+    drop_file_cache(model);
+    let out = std::process::Command::new(exe)
+        .args(["benchmark", &model.to_string_lossy(), "--single-arm", "planned", "--runs", "1"])
+        .args(["--tokens", &a.tokens.to_string(), "--prompt-tokens", &a.prompt_tokens.to_string()])
+        .args(["--ram-budget-bytes", "0", "--threads", &threads.to_string()])
+        .args(["--prefetch-override", &prefetch.to_string(), "--io-workers-override", &io_workers.to_string()])
+        .output()?;
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    match stdout.lines().find_map(|l| l.strip_prefix("KESTREL_ARM_RESULT ")) {
+        Some(j) => Ok(serde_json::from_str(j)?),
+        None => Err(anyhow::anyhow!("trial failed: {}", String::from_utf8_lossy(&out.stderr).lines().last().unwrap_or(""))),
+    }
+}
+
+/// Coordinate-descent autotuning over a bounded grid, with Colibrì's
+/// acceptance gates: identical output, ≥3% median improvement, and a
+/// confirmation rerun in reverse order.
+fn tune(a: &BenchArgs) -> Result<()> {
+    let (_, m) = common::open_model(&a.model)?;
+    let hw = common::hardware(Some(&m), false, false);
+    let runs = a.runs.max(2);
+    let measure = |t: usize, p: usize, w: usize| -> Result<(f64, String)> {
+        let mut v = Vec::new();
+        let mut hash = String::new();
+        for _ in 0..runs {
+            let r = trial(a, &m.path, t, p, w)?;
+            if !hash.is_empty() && r.output_hash != hash {
+                bail!("output changed between runs of the same configuration");
+            }
+            hash = r.output_hash.clone();
+            v.push(r.decode_tok_s);
+        }
+        Ok((median(v), hash))
+    };
+    let (phys, logical) = (hw.cpu.physical_cores, hw.cpu.logical_cores);
+    let base = (phys, 2usize, 8usize);
+    eprintln!("tuning {} · baseline: threads {}, prefetch depth {}, io workers {} · {runs} runs per candidate", m.name, base.0, base.1, base.2);
+    let (base_tok, base_hash) = measure(base.0, base.1, base.2)?;
+    eprintln!("  baseline                      {base_tok:.2} tok/s");
+    let mut best = (base, base_tok);
+    let mut thread_opts = vec![phys, logical, (phys / 2).max(1)];
+    thread_opts.sort_unstable();
+    thread_opts.dedup();
+    // Streaming knobs only matter if the plan streams something.
+    let req = Overrides { no_tune_profile: true, ..default_overrides() }.request(&m)?;
+    let streams = kestrel_planner::plan(&m, &hw, &req).map(|p| p.chosen.disk_weights > 0).unwrap_or(true);
+    let mut axes: Vec<(&str, Vec<usize>)> = vec![("threads", thread_opts)];
+    if streams {
+        axes.push(("prefetch depth", vec![1, 2, 3, 4]));
+        axes.push(("io workers", vec![4, 8, 16]));
+    } else {
+        eprintln!("  (the plan keeps every weight resident: tuning threads only)");
+    }
+    for (name, opts) in axes {
+        for v in opts {
+            let mut c = best.0;
+            match name {
+                "threads" => c.0 = v,
+                "prefetch depth" => c.1 = v,
+                _ => c.2 = v,
+            }
+            if c == best.0 {
+                continue;
+            }
+            let (tok, hash) = measure(c.0, c.1, c.2)?;
+            let ok = hash == base_hash;
+            eprintln!("  {name:<14} {v:<4}            {tok:.2} tok/s{}", if ok { "" } else { "  (output differs: rejected)" });
+            if ok && tok >= best.1 * 1.03 {
+                best = (c, tok);
+            }
+        }
+    }
+    if best.0 == base {
+        println!("no candidate beat the baseline by ≥3%: keeping defaults ({base_tok:.2} tok/s)");
+        return Ok(());
+    }
+    // Confirm in reverse order: winner first, then the baseline (which then
+    // gets any warm-cache advantage).
+    let (win2, _) = measure(best.0 .0, best.0 .1, best.0 .2)?;
+    let (base2, _) = measure(base.0, base.1, base.2)?;
+    if win2 < base2 * 1.03 {
+        println!("winner did not hold up on confirmation ({win2:.2} vs {base2:.2} tok/s): keeping defaults");
+        return Ok(());
+    }
+    let prof = common::TunedProfile { threads: best.0 .0, prefetch_depth: best.0 .1, io_workers: best.0 .2, baseline_tok_s: base2, tuned_tok_s: win2, when: kestrel_hw::bench::now_unix() };
+    prof.save(&hw, &m)?;
+    println!(
+        "tuned: threads {}, prefetch depth {}, io workers {} · {:.2} → {:.2} tok/s (+{:.0}%) · saved to {}",
+        prof.threads,
+        prof.prefetch_depth,
+        prof.io_workers,
+        base2,
+        win2,
+        (win2 / base2 - 1.0) * 100.0,
+        common::TunedProfile::path(&hw, &m).display()
+    );
+    Ok(())
+}
+
+fn default_overrides() -> Overrides {
+    use clap::Parser;
+    #[derive(clap::Parser)]
+    struct P {
+        #[command(flatten)]
+        o: Overrides,
+    }
+    P::parse_from(["kestrel"]).o
 }
