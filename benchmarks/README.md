@@ -219,6 +219,47 @@ relative within one kernel version and were not rerun. Faster compute makes
 streaming arms *more* disk-bound, so their relative gaps to `resident` should
 widen.
 
+## 7. Prepared models: packed experts (`kestrel prepare`)
+
+`kestrel prepare` rewrites the GGUF losslessly so each routed expert is one
+contiguous, page-aligned read instead of three
+([docs/prepared-format.md](../docs/prepared-format.md)). The `@prepared` arms
+run the same arm on the prepared container. Settings match §4: 75% of expert
+bytes do not fit in the cache, 32 tokens, sampling at temperature 1 with a
+fixed seed. Runs are interleaved, page cache dropped before each.
+
+**Every arm on both files produced the same output hash**, end to end through
+the expert cache, lookahead and scratch paths. The transformation is lossless
+in practice, not only by the byte comparison `prepare` runs.
+
+| Model | Arm | Plain GGUF tok/s | Prepared tok/s | Expert reads / token |
+|---|---|---|---|---|
+| 7.6B MoE (32 experts × 5.3 MB), session 1, 3 runs | `kestrel` | 3.97 [3.38-4.14] | 4.88 [4.58-4.97] | 215 → 72 |
+| | `no-lookahead` | 4.33 [4.17-4.47] | 4.38 [4.07-4.67] | 168 → 56 |
+| same, confirmation, 5 runs, prepared arm first | `kestrel` | 4.89 [4.61-5.05] | 5.01 [4.03-5.30] | 215 → 72 |
+| Qwen3-30B-A3B expert shape, 12 layers (128 experts × 2.65 MB, top-8), 5 runs | `kestrel` | 5.91 [5.46-6.25] | 6.09 [5.36-7.49] | 219 → 73 |
+| | `no-lookahead` | 6.76 [6.44-7.68] | 6.58 [6.27-6.98] | 214 → 72 |
+
+Raw data: `results/syn-moe-q4k-prepared.json`,
+`results/syn-moe-q4k-prepared-confirm.json`,
+`results/syn-qwen3-30b-like-prepared.json`.
+
+* **Read operations drop 3×, as designed.** Bytes read are unchanged.
+* **Decode speed: no measurable gain on this host.** The first session showed
+  +23% with lookahead. The confirmation run in reverse order did not
+  reproduce it (+2%), and the Qwen3-30B shape shows −3% to +3%, inside the
+  run-to-run spread. On this VM's disk, with direct I/O and 8 workers, reads
+  of 0.9-1.8 MB are bandwidth-bound and the per-request cost is small.
+  Packing should matter where requests are expensive: IOPS-capped cloud
+  volumes, SATA SSDs at low queue depth, HDDs, and models with smaller
+  experts (low-bit quants or narrow experts, slices of 100-300 KB). None of
+  those were measured here, so no speed-up is claimed.
+* **Load time (all experts resident):** 2.4 vs 2.5 s in the first run, then
+  9.6-10.5 vs 3.5-4.3 s. That is too inconsistent to separate from disk
+  throttling on the VM, so it is not claimed either.
+* Cost: 55-60 s and a second copy on disk (4.2-4.3 GB), most of it spent on
+  writes and on verification.
+
 ## Research questions: status after these runs
 
 | RQ | Status |
@@ -230,6 +271,7 @@ widen.
 | 12. When does streaming become counter-productive? | On this disk, beyond ~75% streamed, decode falls below a fifth of resident speed. The planner reports the disk bound in every plan that streams |
 | 2, 4, 5, 9, 10 | Need a GPU host |
 | 3 (MoE). Does prefetching help for experts? | Router lookahead: +11% decode, -30% stall, 31% more bytes read; host-dependent |
+| 13. Does an offline re-layout beat runtime work? | Packing experts cuts read operations 3× with identical output; no decode gain measurable on this host (§7). Dynamic promotion is now opt-in (`--adapt`); the guard keeps demotion under pressure |
 | 7. How much does dynamic migration cost? | Promote 6 ms per 9 MB layer group (1.5 GB/s) in the background, demote 0.8 ms; adaptive decode went from streaming to fully resident within 64 tokens at 91% of resident speed |
 | 11. How predictable are MoE expert accesses? | One-layer-ahead router lookahead recalls 76% of experts on synthetic weights (uniform routing). Real-model routing traces are still needed |
 

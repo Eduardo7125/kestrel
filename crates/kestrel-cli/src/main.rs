@@ -90,6 +90,23 @@ enum Cmd {
     },
     /// Benchmark scheduling strategies on this machine (see docs/benchmark-plan.md).
     Benchmark(bench::BenchArgs),
+    /// Rewrite a GGUF once into a container laid out for Kestrel's I/O
+    /// (lossless: same tensors, same bytes; experts packed one read each).
+    Prepare {
+        model: String,
+        /// Output path (default: next to the model, `<name>.kgguf`).
+        #[arg(short, long)]
+        output: Option<std::path::PathBuf>,
+        /// Overwrite an existing output.
+        #[arg(long)]
+        force: bool,
+        /// Skip re-reading both files to compare every tensor.
+        #[arg(long)]
+        no_verify: bool,
+        /// Only print what would be written.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 fn main() {
@@ -107,11 +124,74 @@ fn main() {
         Cmd::Run { model, o, prompt, raw, max_tokens, temperature, seed, stats, system } => cmd_run(&model, &o, prompt, raw, max_tokens, temperature, seed, stats, system),
         Cmd::Serve { model, o, host, port, max_tokens } => cmd_serve(&model, &o, &host, port, max_tokens),
         Cmd::Benchmark(a) => bench::run(a),
+        Cmd::Prepare { model, output, force, no_verify, dry_run } => cmd_prepare(&model, output, force, !no_verify, dry_run),
     };
     if let Err(e) = r {
         eprintln!("error: {e:#}");
         std::process::exit(1);
     }
+}
+
+fn cmd_prepare(arg: &str, output: Option<std::path::PathBuf>, force: bool, verify: bool, dry_run: bool) -> Result<()> {
+    use kestrel_model::prepare;
+    let (g, m) = common::open_model(arg)?;
+    let out = output.unwrap_or_else(|| prepare::default_output(&g.path));
+    if out.exists() && !force && !dry_run {
+        bail!("{} exists (use --force to overwrite)", out.display());
+    }
+    let layout = prepare::plan_layout(&g, &m, &out);
+    let r = &layout.report;
+    println!("{} → {}", g.path.display(), out.display());
+    if m.prepared.is_some() {
+        println!("  note            the source is already a prepared container");
+    }
+    if r.experts_packed > 0 {
+        println!(
+            "  experts         {} experts in {} MoE layers packed: {:.1} → {:.1} reads per expert",
+            r.experts_packed, r.moe_layers_packed, r.reads_per_expert_before, r.reads_per_expert_after
+        );
+    } else {
+        println!("  experts         none (dense model): only group order and page alignment change");
+    }
+    println!("  dense groups    {} split into several extents in the source", r.split_groups_before);
+    println!("  padding         {} added for 4 KiB alignment", gb(r.padding_bytes));
+    let need = g.file_size + r.padding_bytes + (64 << 20);
+    let dir = out.parent().filter(|p| !p.as_os_str().is_empty()).unwrap_or(std::path::Path::new("."));
+    if let Some(s) = kestrel_hw::describe_storage(dir) {
+        println!("  disk            needs ~{}, {} free on {}", gb(need), gb(s.available), s.mount_point.display());
+        if s.available < need && !dry_run {
+            bail!("not enough free disk space for the prepared copy ({} needed, {} free)", gb(need), gb(s.available));
+        }
+    }
+    if dry_run {
+        return Ok(());
+    }
+    let total = g.total_tensor_bytes() * if verify { 2 } else { 1 };
+    let (mut done, mut last) = (0u64, std::time::Instant::now());
+    let r = prepare::prepare(&g, &m, &out, verify, |phase, n| {
+        done += n;
+        if last.elapsed().as_millis() > 500 {
+            last = std::time::Instant::now();
+            eprint!("\r  {phase:<7} {:>5.1}%", 100.0 * done as f64 / total.max(1) as f64);
+        }
+    })?;
+    eprintln!("\r                    ");
+    // Carry the expert usage history over: same experts, new file.
+    let new = kestrel_model::ModelDesc::open(&out)?;
+    if let Some(u) = kestrel_memory::expert::UsageFile::load(&m) {
+        kestrel_memory::expert::UsageFile::save(&new, u)?;
+        println!("  usage history   carried over");
+    }
+    println!(
+        "  wrote           {} in {:.1} s ({}/s){}",
+        gb(r.output_bytes),
+        r.seconds,
+        gb((g.total_tensor_bytes() as f64 / r.seconds.max(1e-9)) as u64),
+        if r.verified { " · verified: every tensor identical to the source" } else { "" }
+    );
+    println!("  run it with     kestrel run {}", out.display());
+    println!("  the source GGUF is unchanged; keep it for llama.cpp or delete it to save {}", gb(g.file_size));
+    Ok(())
 }
 
 fn cmd_models() -> Result<()> {
@@ -153,6 +233,9 @@ fn cmd_inspect(arg: &str, json: bool, tensors: bool) -> Result<()> {
     println!("  architecture    {} — {}", m.arch, kestrel_model::adapter_for(&m.arch).description);
     println!("  parameters      {:.3}B", m.n_params as f64 / 1e9);
     println!("  file            {} · GGUF v{} · {} tensors · {}", gb(m.file_size), g.version, m.tensors.len(), m.file_type.clone().unwrap_or_default());
+    if let Some(p) = &m.prepared {
+        println!("  prepared        Kestrel container v{} from {} · experts packed: {} · native backend only", p.version, p.source, if p.packed_experts { "yes" } else { "no" });
+    }
     println!("  layers          {} · embd {} · ff {} · heads {}/{} kv · head dim {} · vocab {}", h.n_layer, h.n_embd, h.n_ff, h.n_head, h.n_head_kv.first().unwrap_or(&0), h.head_dim_k, h.n_vocab);
     println!("  context         {} trained · rope base {}", h.n_ctx_train, h.rope_freq_base);
     if let Some(moe) = &m.moe {

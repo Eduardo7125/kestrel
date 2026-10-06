@@ -15,7 +15,7 @@ mod storage;
 pub use cpu::CpuInfo;
 pub use gpu::{GpuBackend, GpuInfo};
 pub use mem::{process_peak_rss, process_rss, MemInfo};
-pub use storage::StorageInfo;
+pub use storage::{describe as describe_storage, StorageInfo};
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};

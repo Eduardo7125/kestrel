@@ -11,7 +11,7 @@ A phase that fails to show value is reported, not skipped silently.
 | 4. Static scheduler | Planner + `kestrel plan` (strategies, budgets, cost model, diagnostics, llama.cpp args) | Unit-tested decisions; plan explains itself | **Done (MVP)** |
 | 5. Streaming | IoEngine (pool, O_DIRECT), WeightStore (resident + ring) | Bit-identical to resident; bounded RSS | **Done (MVP)** |
 | 6. Prefetch | Deterministic depth-d prefetch, interleaved placement | Benchmark shows the stall reduction | **Done (MVP)**: +63% decode vs no prefetch at equal RAM (benchmarks/README.md) |
-| 7. Adaptive scheduler | Rebalancer (promote/demote), memory guard, autotune | Survives budget shrink; no regression | **Done (MVP)**: background promotion, demotion under pressure, migration cost measured (benchmarks §5), `kestrel benchmark --tune` with output-identity and confirmation gates. Pending: granularity switching, shrinking the ring while promoting |
+| 7. Adaptive scheduler | Rebalancer (promote/demote), memory guard, autotune | Survives budget shrink; no regression | **Done (MVP)**: background promotion, demotion under pressure, migration cost measured (benchmarks §5), `kestrel benchmark --tune` with output-identity and confirmation gates. The plan is static by default: the guard demotes under pressure and restores what it demoted, and promotion beyond the plan is opt-in (`--adapt`). Offline preparation (`kestrel prepare`) replaces work the runtime cannot do. Pending: granularity switching, shrinking the ring while promoting |
 | 8. MoE | Native MoE execution, ExpertCache (LFRU + leases), usage history, router-lookahead prefetch, routing-trace analysis | Expert hit rate and tok/s vs uniform placement | **Done (MVP)**: qwen2moe/qwen3moe/Mixtral-style llama match llama.cpp; LFRU expert cache +31% over LRU; lookahead +11% (benchmarks §4). Pending: real-model routing traces, NUMA, multi-SSD |
 | 9. Advanced hardware | ggml FFI with Kestrel-owned buffers; CUDA/Vulkan/Metal/HIP features; multi-GPU | GPU tier under Kestrel residency control | Pending |
 | 10. Ecosystem | HF model resolution and download (explicit opt-in), safetensors, more architectures (gemma, phi, deepseek2) | — | Pending |
@@ -28,8 +28,10 @@ A phase that fails to show value is reported, not skipped silently.
    GEMM, and SIMD attention.
 2. **io_uring backend** behind `--io uring` (Linux), measured against the pool.
 3. **Windows unbuffered I/O** (`FILE_FLAG_NO_BUFFERING`).
-4. **Expert-granular streaming** for MoE GGUFs. The strided expert slices need
-   three reads per expert. Evaluate an optional re-packed sidecar (`--disk-cache`)
-   that makes each expert contiguous, as Colibrì's container does.
+4. ~~Expert-granular streaming~~ **Done:** `kestrel prepare` writes a
+   lossless container with each expert packed into one contiguous read
+   ([prepared-format.md](prepared-format.md), benchmarks §7). Next:
+   calibration during `prepare` (record expert usage on a prompt set so the
+   first run starts warm) and ordering experts by usage.
 5. **Prefill batching for streamed layers:** with S prompt tokens, one load
    serves S rows. Plan prefill and decode separately (research question 9).

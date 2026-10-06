@@ -117,10 +117,12 @@ At safe points (between tokens, with no leases held), the **MemoryGuard**:
    streamed tier, free their buffers, and lower the ring or cache ceiling so
    they cannot regrow.
 3. If headroom has been above `promote_threshold` for *k* consecutive checks,
-   it allows **promotion** of streamed groups (most bytes-per-token saved
-   first).
+   it **restores** the groups it demoted, in the background. By default that
+   is all: the plan is static, and the guard only protects it. With `--adapt`
+   it also promotes streamed groups the plan never made resident (most
+   compute-to-hide-behind first).
 
-Demotion is always possible because the cold tier, the GGUF file, still holds
+Demotion is always possible because the cold tier, the model file, still holds
 every byte. Kestrel never writes weights back to disk.
 
 ## 7. Page cache

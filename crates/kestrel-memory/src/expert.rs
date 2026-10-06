@@ -120,6 +120,7 @@ struct Metrics {
     lookahead_predicted: AtomicU64,
     lookahead_correct: AtomicU64,
     spec_pauses: AtomicU64,
+    reads: AtomicU64,
 }
 
 #[derive(Clone, Debug, Default, Serialize)]
@@ -145,6 +146,8 @@ pub struct ExpertMetrics {
     pub lookahead_recall: f64,
     /// Times the speculative pool was paused for low accuracy.
     pub spec_pauses: u64,
+    /// File extents read (one expert is 3 in a plain GGUF, 1 when prepared).
+    pub reads: u64,
 }
 
 impl ExpertMetrics {
@@ -165,6 +168,7 @@ impl ExpertMetrics {
         d.lookahead_predicted -= earlier.lookahead_predicted;
         d.lookahead_correct -= earlier.lookahead_correct;
         d.spec_pauses -= earlier.spec_pauses;
+        d.reads -= earlier.reads;
         d.hit_rate = if d.requests == 0 { 0.0 } else { d.hits as f64 / d.requests as f64 };
         d.lookahead_recall = if d.lookahead_predicted == 0 { 0.0 } else { d.lookahead_correct as f64 / d.lookahead_predicted as f64 };
         d
@@ -179,6 +183,8 @@ pub struct ExpertStore {
     slice: Vec<[u64; 3]>,
     model: Arc<ModelDesc>,
     file: Arc<ReadFile>,
+    /// Declared before `state`: dropping it joins the workers before the
+    /// buffers their queued reads target are freed.
     io: Arc<IoEngine>,
     ledger: Arc<Ledger>,
     pub capacity: usize,
@@ -228,9 +234,22 @@ impl ExpertStore {
         })
     }
 
-    fn extents_of(model: &ModelDesc, geom: &ExpertGeometry, slice: &[[u64; 3]], li: usize, e: u32) -> Vec<Extent> {
+    /// The file ranges of expert `e`'s gate, up and down slices. In a plain
+    /// GGUF they are three scattered ranges; in a prepared container
+    /// (`kestrel prepare`) they are adjacent.
+    fn parts_of(model: &ModelDesc, geom: &ExpertGeometry, li: usize, e: u32) -> [Extent; 3] {
         let ts = geom.layers[li].1;
-        (0..3).map(|k| Extent { offset: model.tensors[ts[k]].offset + e as u64 * slice[li][k], len: slice[li][k] }).collect()
+        [0, 1, 2].map(|k| {
+            let t = &model.tensors[ts[k]];
+            Extent { offset: t.slice_offset(e as u64), len: t.slice_bytes() }
+        })
+    }
+
+    /// The reads that load expert `e`: its parts, with adjacent ones merged.
+    fn extents_of(parts: &[Extent; 3]) -> Vec<Extent> {
+        let mut ext = parts.to_vec();
+        ext.sort_by_key(|x| x.offset);
+        kestrel_model::coalesce(&ext, DIRECT_ALIGN as u64)
     }
 
     pub fn bytes_per_expert(&self, layer: u32) -> u64 {
@@ -259,11 +278,13 @@ impl ExpertStore {
 
     fn load(&self, layer: u32, e: u32, (mut buf, res): (AlignedBuf, Reservation)) -> Arc<ExpertBuf> {
         let li = self.layer_pos[&layer];
-        let ext = Self::extents_of(&self.model, &self.geom, &self.slice, li, e);
+        let pe = Self::parts_of(&self.model, &self.geom, li, e);
+        let ext = Self::extents_of(&pe);
         let layout = ExtentLayout::new(&ext);
         let ticket = layout.issue(&self.io, &self.file, &mut buf);
-        let parts = [0, 1, 2].map(|k| (layout.position(ext[k].offset, ext[k].len), ext[k].len as usize));
+        let parts = pe.map(|x| (layout.position(x.offset, x.len), x.len as usize));
         self.m.bytes_read.fetch_add(ext.iter().map(|x| x.len).sum(), Relaxed);
+        self.m.reads.fetch_add(ext.len() as u64, Relaxed);
         Arc::new(ExpertBuf { buf, ticket, parts, _res: res })
     }
 
@@ -538,6 +559,7 @@ impl ExpertStore {
             lookahead_correct: g(&self.m.lookahead_correct),
             lookahead_recall: if pred == 0 { 0.0 } else { g(&self.m.lookahead_correct) as f64 / pred as f64 },
             spec_pauses: g(&self.m.spec_pauses),
+            reads: g(&self.m.reads),
         }
     }
 
@@ -689,6 +711,29 @@ mod tests {
         assert!(mt.scratch_loads > 0, "cold experts stream through scratch: {mt:?}");
         // RAM: at most capacity + scratch buffers.
         assert!(ledger.usage(Tier::Ram).reserved <= 5 * s.buf_len() as u64);
+    }
+
+    #[test]
+    fn prepared_container_serves_identical_experts_in_one_read() {
+        let d = tempfile::tempdir().unwrap();
+        let m = moe_model(d.path());
+        let g = kestrel_gguf::GgufFile::open(&m.path).unwrap();
+        let out = d.path().join("moe.kgguf");
+        kestrel_model::prepare::prepare(&g, &m, &out, true, |_, _| {}).unwrap();
+        let pm = Arc::new(ModelDesc::open(&out).unwrap());
+        let open = |m: &Arc<ModelDesc>| ExpertStore::new(m.clone(), 16, 2, IoMode::Direct, 2, ExpertPolicy::Lfru, Ledger::new(0, 1 << 30, 0)).unwrap();
+        let (a, b) = (open(&m), open(&pm));
+        for l in 0..2 {
+            for e in 0..8 {
+                let (x, y) = (a.get(l, e).unwrap(), b.get(l, e).unwrap());
+                for k in 0..3 {
+                    assert_eq!(x.part(k), y.part(k), "layer {l} expert {e} part {k}");
+                }
+            }
+        }
+        assert_eq!(a.metrics().reads, 3 * 16);
+        assert_eq!(b.metrics().reads, 16);
+        assert_eq!(a.metrics().bytes_read, b.metrics().bytes_read);
     }
 
     #[test]

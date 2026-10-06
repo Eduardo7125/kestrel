@@ -281,6 +281,10 @@ impl WeightStore {
         let io = IoEngine::new(cfg.io_workers);
         let external: Vec<bool> = model.groups.iter().map(|g| cfg.external_experts && g.kind == kestrel_model::GroupKind::Experts).collect();
         let resident: Vec<bool> = resident.iter().zip(&external).map(|(r, e)| *r && !e).collect();
+        // Strided (packed-expert) tensors are not contiguous in a group buffer.
+        if let Some(g) = model.groups.iter().find(|g| !external[g.id] && g.tensors.iter().any(|&t| model.tensors[t].stride.is_some())) {
+            return Err(StoreError::Config(format!("{} holds packed experts (prepared container); they must be served by the expert store", g.label())));
+        }
 
         // Resident groups: reserve, allocate, read in parallel.
         let mut placement = Vec::with_capacity(n);
@@ -697,7 +701,7 @@ impl WeightStore {
 }
 
 #[cfg(test)]
-mod tests_support {
+pub(crate) mod tests_support {
     use super::*;
     use kestrel_gguf::writer::{GgufWriter, TensorData};
     use kestrel_gguf::Value;

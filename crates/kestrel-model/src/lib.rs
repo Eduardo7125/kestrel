@@ -6,6 +6,7 @@
 //! (see `docs/memory-model.md`). Building one reads only the GGUF header.
 
 mod adapters;
+pub mod prepare;
 
 pub use adapters::{adapter_for, all as all_adapters, ArchAdapter, ArchSupport};
 
@@ -132,6 +133,19 @@ pub struct ModelDesc {
     /// Bytes per ggml type across all tensors.
     pub bytes_by_type: BTreeMap<String, u64>,
     pub has_chat_template: bool,
+    /// Set for a Kestrel-prepared container (`kestrel prepare`).
+    pub prepared: Option<PreparedInfo>,
+}
+
+/// Provenance of a prepared container, from its `kestrel.prepared.*` keys.
+#[derive(Clone, Debug, Serialize)]
+pub struct PreparedInfo {
+    pub version: u64,
+    /// File name of the GGUF it was prepared from.
+    pub source: String,
+    pub source_fingerprint: String,
+    /// Routed experts stored as one contiguous read each.
+    pub packed_experts: bool,
 }
 
 impl ModelDesc {
@@ -162,7 +176,9 @@ impl ModelDesc {
         let mut groups = Vec::new();
         for ((_, _, kind), idx) in keyed {
             let layer = classify(&tensors[idx[0]].name).0;
-            let mut ext: Vec<Extent> = idx.iter().map(|&i| Extent { offset: tensors[i].offset, len: tensors[i].size }).collect();
+            // A strided tensor covers its whole span; packed expert tensors
+            // interleave, so their spans overlap and coalesce into one extent.
+            let mut ext: Vec<Extent> = idx.iter().map(|&i| Extent { offset: tensors[i].offset, len: tensors[i].span() }).collect();
             ext.sort_by_key(|e| e.offset);
             let extents = coalesce(&ext, g.alignment);
             let bytes = idx.iter().map(|&i| tensors[i].size).sum();
@@ -222,6 +238,12 @@ impl ModelDesc {
             groups,
             bytes_by_type,
             has_chat_template: g.get_str("tokenizer.chat_template").is_some(),
+            prepared: g.prepared.then(|| PreparedInfo {
+                version: g.get_u64("kestrel.prepared.version").unwrap_or(0),
+                source: g.get_str("kestrel.prepared.source").unwrap_or("?").to_string(),
+                source_fingerprint: g.get_str("kestrel.prepared.source_fingerprint").unwrap_or("?").to_string(),
+                packed_experts: g.tensors.iter().any(|t| t.stride.is_some()),
+            }),
         })
     }
 
@@ -296,14 +318,15 @@ pub fn classify(name: &str) -> (Option<u32>, GroupKind) {
     (None, GroupKind::Other)
 }
 
-/// Merge extents separated only by alignment padding.
-fn coalesce(sorted: &[Extent], alignment: u64) -> Vec<Extent> {
+/// Merge extents (sorted by offset) that overlap or are separated only by
+/// alignment padding.
+pub fn coalesce(sorted: &[Extent], alignment: u64) -> Vec<Extent> {
     let mut out: Vec<Extent> = Vec::new();
     for e in sorted {
         if let Some(last) = out.last_mut() {
             let end = last.offset + last.len;
-            if e.offset >= end && e.offset - end < alignment {
-                last.len = e.offset + e.len - last.offset;
+            if e.offset < end + alignment {
+                last.len = end.max(e.offset + e.len) - last.offset;
                 continue;
             }
         }

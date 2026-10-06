@@ -50,6 +50,7 @@ fn dense(n_layer: u32, n_embd: u64, n_ff: u64, n_vocab: u64, n_kv: u32, bpw: f64
         groups,
         bytes_by_type: Default::default(),
         has_chat_template: true,
+        prepared: None,
     }
 }
 

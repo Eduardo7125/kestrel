@@ -23,8 +23,11 @@ orchestrator**:
 * an **I/O engine**: parallel positional reads with `O_DIRECT`;
 * **prefetch** along the execution order;
 * **Belady-optimal** eviction for cyclic layer scans;
-* a **rebalancer** that promotes and demotes layers at runtime under a
-  memory guard that trusts measured RSS over projections;
+* a **static plan with a memory guard**: layers are demoted when measured RSS
+  or free memory crosses a limit, and restored when memory is back. Promotion
+  beyond the plan is opt-in (`--adapt`);
+* **`kestrel prepare`**: a one-time, lossless re-layout of the model file
+  (experts packed into one read each, page-aligned groups);
 * for MoE models, an **expert cache**: one routed expert per unit, LFRU with
   hysteresis, batch-union loading, router-lookahead prefetch, and
   usage-history warm starts. This generalizes
@@ -50,7 +53,17 @@ cargo build --release
 ./target/release/kestrel run model.gguf            # interactive chat
 ./target/release/kestrel run model.gguf -p "Hi" --stats
 ./target/release/kestrel serve model.gguf --port 8080
+./target/release/kestrel prepare model.gguf        # optional, once: lossless re-layout (model.kgguf)
 ```
+
+`kestrel prepare` rewrites the GGUF once into a container laid out for
+Kestrel's I/O. The tensors and bytes are identical and verified; only their
+placement changes. For MoE models each routed expert becomes one contiguous
+read instead of three. That cuts read operations 3×. On the test VM's disk it
+made no measurable difference to decode speed (benchmarks §7), so treat it
+as an I/O-efficiency tool for disks where requests are expensive, not a
+proven speed-up. Name resolution prefers the prepared file. Keep the source
+GGUF for llama.cpp. See [docs/prepared-format.md](docs/prepared-format.md).
 
 Models are found by path, or by (partial) name in `$KESTREL_MODELS`,
 `~/.cache/kestrel/models`, `./models` and `.`. Kestrel never downloads
@@ -66,7 +79,8 @@ kestrel run model.gguf \
 
 `--backend native|llamacpp|auto`, `--strategy gpu-full|hybrid|ram|ram-nvme|vram-ram-nvme`,
 `--no-stream`, `--placement interleaved|contiguous`, `--policy belady|lru`,
-`--io direct|buffered`, `--threads N`, `--no-adapt`, `--allow-overcommit`.
+`--io direct|buffered`, `--threads N`, `--adapt` (promote beyond the plan),
+`--no-adapt` (no memory guard), `--allow-overcommit`.
 
 ### OpenAI-compatible API
 

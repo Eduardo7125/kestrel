@@ -63,6 +63,7 @@ impl Overrides {
                 ExpertPolicyArg::Lru => kestrel_memory::ExpertPolicy::Lru,
             },
             usage_history: !self.no_usage_history,
+            promote_beyond_plan: self.adapt,
         }
     }
 }
@@ -133,9 +134,13 @@ pub struct Overrides {
     /// Allow budgets larger than currently available memory.
     #[arg(long)]
     pub allow_overcommit: bool,
-    /// Disable runtime promotion/demotion of layers.
+    /// Disable the memory guard (no demotion under pressure, no restore).
     #[arg(long)]
     pub no_adapt: bool,
+    /// Also promote streamed layers beyond the plan when memory frees up
+    /// (default: the plan is static; only pressure demotions are undone).
+    #[arg(long, conflicts_with = "no_adapt")]
+    pub adapt: bool,
     /// Expert-cache policy for MoE models (lru is an ablation).
     #[arg(long, value_enum, default_value = "lfru")]
     pub expert_policy: ExpertPolicyArg,
@@ -229,7 +234,11 @@ fn model_dirs() -> Vec<PathBuf> {
     v
 }
 
-/// All `.gguf` files under the model directories (one level deep).
+fn is_model_file(p: &Path) -> bool {
+    p.extension().is_some_and(|x| x == "gguf" || x == "kgguf")
+}
+
+/// All `.gguf` and prepared `.kgguf` files under the model directories (one level deep).
 pub fn list_models() -> Vec<PathBuf> {
     let mut out = Vec::new();
     for d in model_dirs() {
@@ -238,9 +247,9 @@ pub fn list_models() -> Vec<PathBuf> {
             let p = e.path();
             if p.is_dir() {
                 if let Ok(sub) = std::fs::read_dir(&p) {
-                    out.extend(sub.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "gguf")));
+                    out.extend(sub.flatten().map(|e| e.path()).filter(|p| is_model_file(p)));
                 }
-            } else if p.extension().is_some_and(|x| x == "gguf") {
+            } else if is_model_file(&p) {
                 out.push(p);
             }
         }
@@ -263,10 +272,12 @@ pub fn resolve_model(arg: &str) -> Result<PathBuf> {
         .filter(|m| m.file_name().map(|f| f.to_string_lossy().to_ascii_lowercase().contains(&key)).unwrap_or(false))
         .collect();
     // Exact file-stem match first, then prefix matches, then a Q4_K_M file
-    // when several quantizations match.
+    // when several quantizations match; a prepared container before its source.
+    let key = key.strip_suffix(".gguf").or_else(|| key.strip_suffix(".kgguf")).unwrap_or(&key).to_string();
     hits.sort_by_key(|m| {
         let stem = m.file_stem().map(|s| s.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
-        (stem != key, !stem.starts_with(&key), !stem.contains("q4_k_m"), stem.len())
+        let prepared = m.extension().is_some_and(|x| x == "kgguf");
+        (stem != key, !stem.starts_with(&key), !stem.contains("q4_k_m"), stem.len(), !prepared)
     });
     if let Some(h) = hits.into_iter().next() {
         return Ok(h);

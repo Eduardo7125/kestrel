@@ -96,9 +96,11 @@ pub fn plan_text(p: &ExecutionPlan) -> String {
 pub fn infeasible_text(x: &Infeasible) -> String {
     let mut s = String::new();
     let _ = writeln!(s, "Model cannot currently be executed: {}\n", x.model_name);
-    let _ = writeln!(s, "Required (minimum, with NVMe streaming):");
-    let _ = writeln!(s, "  RAM:  {}", fb(x.required_ram));
-    let _ = writeln!(s, "\nAvailable:");
+    if x.required_ram > 0 {
+        let _ = writeln!(s, "Required (minimum, with NVMe streaming):");
+        let _ = writeln!(s, "  RAM:  {}\n", fb(x.required_ram));
+    }
+    let _ = writeln!(s, "Available:");
     if x.available_vram > 0 {
         let _ = writeln!(s, "  VRAM: {} usable", fb(x.available_vram));
     }

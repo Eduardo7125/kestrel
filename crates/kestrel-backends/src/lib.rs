@@ -61,11 +61,15 @@ pub struct NativeOptions {
     pub expert_policy: ExpertPolicy,
     /// Load and persist expert usage next to the model (warm starts).
     pub usage_history: bool,
+    /// Promote streamed layers beyond the plan when memory frees up. Off by
+    /// default: the plan is static, and the memory guard only demotes under
+    /// pressure and restores what it demoted.
+    pub promote_beyond_plan: bool,
 }
 
 impl Default for NativeOptions {
     fn default() -> Self {
-        NativeOptions { adaptive: true, expert_policy: ExpertPolicy::Lfru, usage_history: true }
+        NativeOptions { adaptive: true, expert_policy: ExpertPolicy::Lfru, usage_history: true, promote_beyond_plan: false }
     }
 }
 
@@ -110,9 +114,10 @@ impl NativeSession {
                 min_available: b.ram.safety / 2,
                 tolerance: 0.02,
             });
-            // Promotion is a no-op while nothing is streamed; after a demotion
-            // under pressure it lets a resident plan recover once memory frees up.
+            // Restores layers demoted under pressure once memory frees up;
+            // promotes beyond the plan only when asked.
             r.allow_promotion = true;
+            r.beyond_plan = opts.promote_beyond_plan;
             r.pinned = model.groups.iter().filter(|g| g.layer.is_none()).map(|g| g.id).collect();
             r
         });
@@ -138,6 +143,7 @@ impl NativeSession {
             r.promote_after = promote_after;
             r.guard.rss_limit = rss_limit;
             r.allow_promotion = true;
+            r.beyond_plan = true;
         }
     }
 

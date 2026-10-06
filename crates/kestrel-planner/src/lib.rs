@@ -289,6 +289,12 @@ pub fn plan(model: &ModelDesc, hw: &HardwareProfile, req: &PlanRequest) -> Resul
         }
         cands.push(c);
     }
+    if let Some(p) = &model.prepared {
+        for c in cands.iter_mut().filter(|c| c.backend == Backend::LlamaCpp && c.feasible) {
+            c.feasible = false;
+            c.reason = Some(format!("a prepared container runs on the native backend only; give llama.cpp the source GGUF ({})", p.source));
+        }
+    }
     if let Some(k) = req.strategy {
         for c in cands.iter_mut().filter(|c| c.kind != k) {
             if c.feasible {
@@ -593,6 +599,22 @@ fn diagnose(model: &ModelDesc, b: &Budgets, req: &PlanRequest, n_ctx: u64, kv_by
     let mut reasons: Vec<String> = candidates.iter().filter_map(|c| c.reason.clone().map(|r| format!("{} ({:?}): {r}", c.kind.label(), c.backend))).collect();
     reasons.dedup();
     let mut remedies = Vec::new();
+    if let (Some(p), Some(Backend::LlamaCpp)) = (&model.prepared, req.backend) {
+        // Not a memory problem: llama.cpp cannot read the container.
+        remedies.push(format!("Run llama.cpp on the source GGUF ({}), or use --backend native with this file", p.source));
+        return Infeasible {
+            model_name: model.name.clone(),
+            required_vram: 0,
+            required_ram: 0,
+            required_disk: 0,
+            available_vram: b.vram.available,
+            available_ram: b.ram.available,
+            available_disk: b.disk_free,
+            reasons,
+            remedies,
+            candidates,
+        };
+    }
     let gib = |x: u64| kestrel_hw::fmt_bytes(x);
     let bpw = total as f64 * 8.0 / model.n_params.max(1) as f64;
     if bpw > 5.5 {

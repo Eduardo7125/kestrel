@@ -19,6 +19,13 @@ use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 pub const GGUF_MAGIC: [u8; 4] = *b"GGUF";
+/// Magic of a Kestrel-prepared container (`kestrel prepare`). The layout is
+/// GGUF v3, but routed-expert tensors may be *strided* (see
+/// [`TensorInfo::stride`]), which other GGUF readers would misread. The
+/// distinct magic makes them refuse the file instead.
+pub const KGUF_MAGIC: [u8; 4] = *b"KGUF";
+/// Metadata key prefix for per-tensor strides in a prepared container.
+pub const STRIDE_KEY_PREFIX: &str = "kestrel.stride.";
 pub const DEFAULT_ALIGNMENT: u64 = 32;
 
 /// Defensive limits against corrupt or hostile files: a crafted header could
@@ -149,6 +156,13 @@ pub struct TensorInfo {
     /// Absolute offset in the file.
     pub offset: u64,
     pub size: u64,
+    /// Prepared containers only: the tensor is split along its outermost
+    /// dimension into `dims.last()` equal slices, and slice `i` starts at
+    /// `offset + i * stride` instead of being contiguous. Used to interleave
+    /// the gate/up/down slices of each routed expert so one expert is one
+    /// contiguous read.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stride: Option<u64>,
 }
 
 impl TensorInfo {
@@ -162,12 +176,32 @@ impl TensorInfo {
     pub fn row_bytes(&self) -> u64 {
         self.size / self.rows().max(1)
     }
+    /// Number of outermost-dimension slices (experts, for stacked tensors).
+    pub fn n_slices(&self) -> u64 {
+        *self.dims.last().unwrap_or(&1)
+    }
+    pub fn slice_bytes(&self) -> u64 {
+        self.size / self.n_slices().max(1)
+    }
+    /// File offset of outermost slice `i`.
+    pub fn slice_offset(&self, i: u64) -> u64 {
+        self.offset + i * self.stride.unwrap_or_else(|| self.slice_bytes())
+    }
+    /// Bytes from `offset` to the end of the last slice.
+    pub fn span(&self) -> u64 {
+        match self.stride {
+            Some(st) => (self.n_slices() - 1) * st + self.slice_bytes(),
+            None => self.size,
+        }
+    }
 }
 
 #[derive(Debug)]
 pub struct GgufFile {
     pub path: PathBuf,
     pub version: u32,
+    /// A Kestrel-prepared container (`KGUF` magic) rather than a plain GGUF.
+    pub prepared: bool,
     pub metadata: BTreeMap<String, Value>,
     pub tensors: Vec<TensorInfo>,
     pub alignment: u64,
@@ -185,7 +219,8 @@ impl GgufFile {
 
         let mut magic = [0u8; 4];
         r.read_exact(&mut magic)?;
-        if magic != GGUF_MAGIC {
+        let prepared = magic == KGUF_MAGIC;
+        if magic != GGUF_MAGIC && !prepared {
             return Err(GgufError::BadMagic(magic));
         }
         let version = r.u32()?;
@@ -251,16 +286,35 @@ impl GgufFile {
                 return Err(GgufError::Corrupt(format!("tensor '{name}' offset {rel_offset} not aligned")));
             }
             let offset = data_offset + rel_offset;
-            if offset.checked_add(size).is_none_or(|end| end > file_size) {
+            let stride = match metadata.get(&format!("{STRIDE_KEY_PREFIX}{name}")) {
+                None => None,
+                Some(_) if !prepared => {
+                    return Err(GgufError::Corrupt(format!("tensor '{name}' is strided in a plain GGUF file")));
+                }
+                Some(v) => {
+                    let st = v.as_u64().ok_or_else(|| GgufError::Corrupt(format!("stride of '{name}' is not an integer")))?;
+                    let slices = *dims.last().unwrap();
+                    let slice = size / slices.max(1);
+                    if slices < 2 || size % slices != 0 || st < slice || st % alignment != 0 {
+                        return Err(GgufError::Corrupt(format!("tensor '{name}': invalid stride {st} for {slices} slices of {slice} bytes")));
+                    }
+                    Some(st)
+                }
+            };
+            let span = match stride {
+                Some(st) => (dims.last().unwrap() - 1).checked_mul(st).and_then(|x| x.checked_add(size / dims.last().unwrap())),
+                None => Some(size),
+            };
+            if span.and_then(|sp| offset.checked_add(sp)).is_none_or(|end| end > file_size) {
                 return Err(GgufError::Corrupt(format!(
                     "tensor '{name}' [{offset}, +{size}) extends past end of file ({file_size} bytes) — truncated download?"
                 )));
             }
             index.insert(name.clone(), tensors.len());
-            tensors.push(TensorInfo { name, dims, ggml_type, rel_offset, offset, size });
+            tensors.push(TensorInfo { name, dims, ggml_type, rel_offset, offset, size, stride });
         }
 
-        Ok(GgufFile { path, version, metadata, tensors, alignment, data_offset, file_size, index })
+        Ok(GgufFile { path, version, prepared, metadata, tensors, alignment, data_offset, file_size, index })
     }
 
     pub fn tensor(&self, name: &str) -> Option<&TensorInfo> {

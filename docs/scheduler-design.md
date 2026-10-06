@@ -142,7 +142,9 @@ set plus the ring, sized by the planner and adjusted by the Rebalancer.
 ### 4.2 Expert cache (LFRU with leases): implemented in `kestrel-memory/src/expert.rs`
 
 The unit is one routed expert: its slices of the stacked `ffn_{gate,up,down}_exps`
-tensors, read as three extents into one aligned buffer.
+tensors, read as three extents into one aligned buffer. In a prepared container
+(`kestrel prepare`, [prepared-format.md](prepared-format.md)) the three slices
+are adjacent and are read as one extent.
 
 ```text
 score(e) = (heat(e) << 8) | recency(e)          recency = max(0, 255 − age)
@@ -167,13 +169,27 @@ not evicted. Context-length planning happens in the planner (§2).
 
 ## 5. Dynamic scheduling (Phase 7)
 
+**The plan is static by default.** For dense layers everything that makes
+decode fast is decided once: which groups are pinned, the interleaved order,
+the prefetch depth. In steady state a migration only pays off when the
+initial plan left RAM unused, and a better initial plan removes that case.
+Migration also costs memory while it happens (benchmarks §5: adaptation peak
+RSS above both endpoints). What stays dynamic is what cannot be known in
+advance:
+
+* **Memory pressure.** Other applications change free RAM while the model
+  runs. Demotion costs ~1 ms and is the alternative to an OOM kill.
+* **Expert hotness (MoE).** Which experts are hot depends on the prompt, so the
+  expert cache (§4.2) adapts continuously.
+
 The **Rebalancer** runs at safe points every `rebalance_interval` tokens
 (default 16):
 
 | Signal | Action |
 |---|---|
 | RSS over limit, or available memory below half the safety margin | Demote the resident layer with the lowest interleave value, free its buffer, and shrink the RAM limit (with hysteresis) |
-| Sustained headroom ≥ one layer's bytes plus the safety margin (k consecutive checks) | Promote the streamed layer whose removal most reduces stall time (the one with the least compute before it) |
+| Sustained headroom (k consecutive checks) after a demotion | Restore the demoted layers in the background, giving the ledger room back |
+| Sustained headroom ≥ one layer's bytes plus the safety margin, **with `--adapt` only** | Promote the streamed layer whose removal most reduces stall time (the one with the least compute before it) |
 | Stall fraction > threshold and RAM ring has headroom | Increase prefetch depth `d` |
 | Expert heat shift (MoE) | LFRU swap (≤ 4 per interval, with hysteresis) |
 

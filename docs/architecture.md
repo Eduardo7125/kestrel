@@ -91,10 +91,15 @@ backend, a `WeightStore` that hands out *leases* on weight bytes.
 6. **Execute.** For each token, layer by layer, the backend acquires a lease on
    layer *i*. The prefetcher has already issued the reads for layers
    *i+1 … i+d*, so I/O overlaps compute. Metrics record hits, stalls, and bytes.
-7. **Adapt.** At token boundaries (safe points with no leases held), the
-   Rebalancer may promote streamed groups to resident when measured RAM
-   headroom allows. It demotes groups (frees buffers) when the RSS or
-   available-memory guard trips.
+7. **Guard.** At token boundaries (safe points with no leases held), the
+   Rebalancer demotes groups (frees buffers) when the RSS or
+   available-memory guard trips, and restores them once memory is back.
+   Promoting beyond the plan is opt-in (`--adapt`). For MoE models the expert
+   cache adapts continuously, because which experts are hot depends on the
+   prompt, not on the model.
+
+Before step 1, `kestrel prepare` can rewrite the GGUF once into a container
+laid out for Kestrel's I/O (see [prepared-format.md](prepared-format.md)).
 
 ## 3. Key abstractions
 

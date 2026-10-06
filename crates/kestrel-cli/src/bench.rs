@@ -91,6 +91,9 @@ pub struct ArmRun {
     pub lookahead_recall: Option<f64>,
     #[serde(default)]
     pub expert_bytes: Option<u64>,
+    /// MoE: file extents read for experts (3 per expert in a plain GGUF, 1 prepared).
+    #[serde(default)]
+    pub expert_reads: Option<u64>,
 }
 
 fn meminfo_cached() -> i64 {
@@ -160,7 +163,17 @@ pub fn run(a: BenchArgs) -> Result<()> {
     let mut results: Vec<ArmRun> = Vec::new();
     for run in 0..a.runs {
         for arm in &arms {
-            drop_file_cache(&m.path);
+            // `<arm>@prepared` runs the arm on the prepared container
+            // (`kestrel prepare`) next to the model instead of the GGUF.
+            let (base, path) = match arm.strip_suffix("@prepared") {
+                Some(b) => (b, kestrel_model::prepare::default_output(&m.path)),
+                None => (arm.as_str(), m.path.clone()),
+            };
+            if !path.exists() {
+                eprintln!("  skip {arm}: {} not found (run `kestrel prepare` first)", path.display());
+                continue;
+            }
+            drop_file_cache(&path);
             let r = if arm.starts_with("llamacpp") {
                 match &llama_bench {
                     Some(lb) => llamacpp_arm(lb, &m.path.to_string_lossy(), arm, &a, run),
@@ -171,7 +184,7 @@ pub fn run(a: BenchArgs) -> Result<()> {
                 }
             } else {
                 let mut cmd = std::process::Command::new(&exe);
-                cmd.args(["benchmark", &m.path.to_string_lossy(), "--single-arm", arm, "--tokens", &a.tokens.to_string(), "--prompt-tokens", &a.prompt_tokens.to_string(), "--runs", "1"]);
+                cmd.args(["benchmark", &path.to_string_lossy(), "--single-arm", base, "--tokens", &a.tokens.to_string(), "--prompt-tokens", &a.prompt_tokens.to_string(), "--runs", "1"]);
                 cmd.args(["--ram-budget-bytes", &budget.to_string()]);
                 if let Some(t) = a.threads {
                     cmd.args(["--threads", &t.to_string()]);
@@ -179,10 +192,10 @@ pub fn run(a: BenchArgs) -> Result<()> {
                 if let Some(t) = a.temperature {
                     cmd.args(["--temperature", &t.to_string()]);
                 }
-                if arm == "no-lookahead" {
+                if base == "no-lookahead" {
                     cmd.env("KESTREL_LOOKAHEAD", "0");
                 }
-                if arm == "lookahead-always" {
+                if base == "lookahead-always" {
                     cmd.env("KESTREL_SPEC_MIN_ACCURACY", "0");
                 }
                 let out = cmd.output()?;
@@ -191,6 +204,7 @@ pub fn run(a: BenchArgs) -> Result<()> {
                     Some(j) => {
                         let mut r: ArmRun = serde_json::from_str(j)?;
                         r.run = run;
+                        r.arm = arm.clone();
                         Ok(r)
                     }
                     None => Err(anyhow::anyhow!("{arm} failed: {}", String::from_utf8_lossy(&out.stderr).lines().last().unwrap_or(""))),
@@ -264,10 +278,12 @@ fn summarize(results: &[ArmRun], arms: &[String]) {
         if let Some(eh) = r0.expert_hit_rate {
             let recall: Vec<f64> = rs.iter().filter_map(|r| r.lookahead_recall).collect();
             println!(
-                "{:<14} experts: hit {:.0}% · read {}/token · lookahead recall {}",
+                "{:<14} experts: hit {:.0}% · read {}/token in {:.0} reads · load {:.2}s · lookahead recall {}",
                 "",
                 median(rs.iter().filter_map(|r| r.expert_hit_rate).collect()) * 100.0,
                 gb(r0.expert_bytes.unwrap_or(0) / (r0.generated.max(1) + 1) as u64),
+                median(rs.iter().map(|r| r.expert_reads.unwrap_or(0) as f64 / (r.generated.max(1) + 1) as f64).collect()),
+                median(rs.iter().map(|r| r.load_s).collect()),
                 if recall.is_empty() { "off".to_string() } else { format!("{:.0}%", median(recall) * 100.0) }
             );
             let _ = eh;
@@ -306,6 +322,7 @@ fn run_arm(a: &BenchArgs, arm: &str) -> Result<ArmRun> {
         threads: a.threads,
         allow_overcommit: streaming,
         no_adapt: true,
+        adapt: false,
         no_bench: true,
         expert_policy: if arm == "lru-experts" { common::ExpertPolicyArg::Lru } else { common::ExpertPolicyArg::Lfru },
         no_usage_history: true,
@@ -429,6 +446,7 @@ fn run_arm(a: &BenchArgs, arm: &str) -> Result<ArmRun> {
         expert_hit_rate: st.experts.as_ref().map(|e| e.hit_rate),
         lookahead_recall: st.experts.as_ref().filter(|e| e.lookahead_predicted > 0).map(|e| e.lookahead_recall),
         expert_bytes: st.experts.as_ref().map(|e| e.bytes_read),
+        expert_reads: st.experts.as_ref().map(|e| e.reads),
     })
 }
 
@@ -478,6 +496,7 @@ fn llamacpp_arm(bin: &std::path::Path, model: &str, arm: &str, a: &BenchArgs, ru
         expert_hit_rate: None,
         lookahead_recall: None,
         expert_bytes: None,
+        expert_reads: None,
     })
 }
 

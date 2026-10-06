@@ -52,25 +52,10 @@ impl GgufWriter {
 
     pub fn write(&self, path: impl AsRef<Path>) -> std::io::Result<()> {
         let mut out = std::io::BufWriter::new(std::fs::File::create(path)?);
-        let mut buf = Vec::new();
-        buf.extend_from_slice(b"GGUF");
-        buf.extend_from_slice(&3u32.to_le_bytes());
-        buf.extend_from_slice(&(self.tensors.len() as u64).to_le_bytes());
-        buf.extend_from_slice(&(self.kv.len() as u64).to_le_bytes());
-        for (k, v) in &self.kv {
-            put_str(&mut buf, k);
-            put_value(&mut buf, v, true);
-        }
         let mut offset = 0u64;
+        let mut infos = Vec::new();
         let mut payloads = Vec::new();
         for (name, dims, data) in &self.tensors {
-            put_str(&mut buf, name);
-            buf.extend_from_slice(&(dims.len() as u32).to_le_bytes());
-            for d in dims {
-                buf.extend_from_slice(&d.to_le_bytes());
-            }
-            buf.extend_from_slice(&data.ggml_type().id().to_le_bytes());
-            buf.extend_from_slice(&offset.to_le_bytes());
             let bytes = data.bytes();
             let n: u64 = dims.iter().product();
             assert_eq!(
@@ -78,12 +63,11 @@ impl GgufWriter {
                 data.ggml_type().bytes_for(n),
                 "tensor {name}: payload size does not match dims/type"
             );
+            infos.push(HeaderTensor { name: name.clone(), dims: dims.clone(), ggml_type: data.ggml_type(), rel_offset: offset });
             offset = align_up(offset + bytes.len() as u64, DEFAULT_ALIGNMENT);
             payloads.push(bytes);
         }
-        let header_end = align_up(buf.len() as u64, DEFAULT_ALIGNMENT);
-        buf.resize(header_end as usize, 0);
-        out.write_all(&buf)?;
+        out.write_all(&encode_header(*b"GGUF", &self.kv, &infos, DEFAULT_ALIGNMENT, 1))?;
         let mut written = 0u64;
         for p in payloads {
             out.write_all(&p)?;
@@ -94,6 +78,59 @@ impl GgufWriter {
         }
         out.flush()
     }
+}
+
+/// One entry of the tensor info table.
+pub struct HeaderTensor {
+    pub name: String,
+    pub dims: Vec<u64>,
+    pub ggml_type: GgmlType,
+    pub rel_offset: u64,
+}
+
+/// Encode a GGUF v3 header (magic, metadata, tensor table) padded so the data
+/// section starts at a multiple of `data_align` (itself a multiple of the
+/// tensor `alignment`). Alignment beyond `alignment` is reached with a
+/// `kestrel.pad` string entry, which readers ignore.
+pub fn encode_header(magic: [u8; 4], kv: &[(String, Value)], tensors: &[HeaderTensor], alignment: u64, data_align: u64) -> Vec<u8> {
+    let build = |pad: Option<usize>| {
+        let mut buf = Vec::new();
+        buf.extend_from_slice(&magic);
+        buf.extend_from_slice(&3u32.to_le_bytes());
+        buf.extend_from_slice(&(tensors.len() as u64).to_le_bytes());
+        buf.extend_from_slice(&((kv.len() + pad.is_some() as usize) as u64).to_le_bytes());
+        for (k, v) in kv {
+            put_str(&mut buf, k);
+            put_value(&mut buf, v, true);
+        }
+        if let Some(n) = pad {
+            put_str(&mut buf, "kestrel.pad");
+            put_value(&mut buf, &Value::String(" ".repeat(n)), true);
+        }
+        for t in tensors {
+            put_str(&mut buf, &t.name);
+            buf.extend_from_slice(&(t.dims.len() as u32).to_le_bytes());
+            for d in &t.dims {
+                buf.extend_from_slice(&d.to_le_bytes());
+            }
+            buf.extend_from_slice(&t.ggml_type.id().to_le_bytes());
+            buf.extend_from_slice(&t.rel_offset.to_le_bytes());
+        }
+        buf
+    };
+    let mut buf = if data_align > alignment {
+        // The pad entry costs a fixed 35 bytes plus its length.
+        let base = build(Some(0)).len() as u64;
+        let target = align_up(base, data_align);
+        let b = build(Some((target - base) as usize));
+        debug_assert_eq!(b.len() as u64 % data_align, 0);
+        b
+    } else {
+        build(None)
+    };
+    let header_end = align_up(buf.len() as u64, alignment);
+    buf.resize(header_end as usize, 0);
+    buf
 }
 
 fn put_str(buf: &mut Vec<u8>, s: &str) {
