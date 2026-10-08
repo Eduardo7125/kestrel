@@ -1,5 +1,7 @@
 <div align="center">
 
+<img src="assets/logo.png" alt="Kestrel logo" width="200">
+
 # Kestrel
 
 **Memory-tiered local LLM inference: plan across VRAM, RAM and NVMe, then run.**
