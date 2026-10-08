@@ -13,7 +13,7 @@ pub mod lfru;
 pub mod metrics;
 pub mod store;
 
-pub use expert::{ExpertLease, ExpertMetrics, ExpertPolicy, ExpertStore, UsageFile};
+pub use expert::{ExpertLease, ExpertMap, ExpertMetrics, ExpertPolicy, ExpertStore, UsageFile};
 pub use guard::{MemoryGuard, Pressure};
 pub use ledger::{BudgetError, Ledger, Reservation, Tier, TierUsage};
 pub use lfru::LfruCache;
