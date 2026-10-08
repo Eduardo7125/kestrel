@@ -34,7 +34,7 @@ Two halves serve that objective:
 | CLI | `models`, `inspect`, `hardware`, `plan`, `run`, `serve`, `benchmark` | Integration tests on a fixture model |
 | Server | `POST /v1/chat/completions` (with stream), `POST /v1/completions`, `GET /v1/models`, `GET /health`, `GET /metrics` | The OpenAI Python client works unchanged |
 | Safety | No allocation past budget; plan refuses infeasible configurations with an explanation | Tests |
-| Privacy | No network access at runtime | No HTTP client in the default build |
+| Privacy | No network access at runtime | The only network access is the model download in `kestrel setup`, after the user picks a model |
 
 ## Out of scope for the MVP
 

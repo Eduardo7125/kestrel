@@ -2,6 +2,8 @@
 
 mod bench;
 mod common;
+mod download;
+mod setup;
 
 use anyhow::{bail, Result};
 use clap::{Parser, Subcommand};
@@ -15,19 +17,62 @@ use std::io::{BufRead, Write};
 use std::sync::{Arc, Mutex};
 
 #[derive(Parser)]
-#[command(name = "kestrel", version, about = "Local LLM runtime that plans across VRAM, RAM and NVMe")]
+#[command(
+    name = "kestrel",
+    version,
+    about = "Local LLM runtime that plans across VRAM, RAM and NVMe",
+    after_help = "Getting started: ./start-here.sh (or `kestrel setup`) picks, downloads and starts a model.\nThen `kestrel chat` or `kestrel serve`. Plain `kestrel` opens the chat."
+)]
 struct Cli {
     #[command(subcommand)]
-    cmd: Cmd,
+    cmd: Option<Cmd>,
 }
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Pick a model that fits this machine, download it and make it the default.
+    Setup {
+        /// Install this catalog model (see --list) without asking.
+        #[arg(long)]
+        model: Option<String>,
+        /// Any Hugging Face GGUF repository (owner/name) instead of the catalog.
+        #[arg(long)]
+        repo: Option<String>,
+        /// Quantization to download.
+        #[arg(long, default_value = setup::DEFAULT_QUANT)]
+        quant: String,
+        /// Use a GGUF already on disk.
+        #[arg(long, value_name = "PATH")]
+        model_file: Option<std::path::PathBuf>,
+        /// Where to keep models (default: ~/.cache/kestrel/models).
+        #[arg(long)]
+        dir: Option<std::path::PathBuf>,
+        /// Show every catalog model against this machine, then stop.
+        #[arg(long)]
+        list: bool,
+        /// No questions: take the recommendation.
+        #[arg(long, short = 'y')]
+        yes: bool,
+        /// Choose another model even if one is configured.
+        #[arg(long)]
+        reconfigure: bool,
+        /// After setup: serve the API instead of opening the chat.
+        #[arg(long)]
+        serve: bool,
+        /// After setup: stop instead of starting the model.
+        #[arg(long)]
+        no_start: bool,
+        #[arg(long, default_value_t = 8080)]
+        port: u16,
+    },
+    /// Show the configured model and whether the API server is running.
+    Status,
     /// List local GGUF models (KESTREL_MODELS, ~/.cache/kestrel/models, ./models).
     Models,
     /// Describe a model: architecture, tensors, quantization, memory needs.
     Inspect {
-        model: String,
+        /// Model file or name (default: the one `setup` configured).
+        model: Option<String>,
         #[arg(long)]
         json: bool,
         /// List every tensor.
@@ -46,15 +91,18 @@ enum Cmd {
     },
     /// Show the execution plan Kestrel would use.
     Plan {
-        model: String,
+        /// Model file or name (default: the one `setup` configured).
+        model: Option<String>,
         #[command(flatten)]
         o: Overrides,
         #[arg(long)]
         json: bool,
     },
-    /// Run a model: one prompt (-p) or an interactive chat.
+    /// Chat with a model, or answer one prompt (-p).
+    #[command(visible_alias = "chat")]
     Run {
-        model: String,
+        /// Model file or name (default: the one `setup` configured).
+        model: Option<String>,
         #[command(flatten)]
         o: Overrides,
         /// Prompt; omit for interactive chat.
@@ -78,7 +126,8 @@ enum Cmd {
     },
     /// Serve an OpenAI-compatible API.
     Serve {
-        model: String,
+        /// Model file or name (default: the one `setup` configured).
+        model: Option<String>,
         #[command(flatten)]
         o: Overrides,
         #[arg(long, default_value = "127.0.0.1")]
@@ -117,18 +166,43 @@ fn main() {
     }
     let cli = Cli::parse();
     let r = match cli.cmd {
-        Cmd::Models => cmd_models(),
-        Cmd::Inspect { model, json, tensors } => cmd_inspect(&model, json, tensors),
-        Cmd::Hardware { bench, path, json } => cmd_hardware(bench, path, json),
-        Cmd::Plan { model, o, json } => cmd_plan(&model, &o, json),
-        Cmd::Run { model, o, prompt, raw, max_tokens, temperature, seed, stats, system } => cmd_run(&model, &o, prompt, raw, max_tokens, temperature, seed, stats, system),
-        Cmd::Serve { model, o, host, port, max_tokens } => cmd_serve(&model, &o, &host, port, max_tokens),
-        Cmd::Benchmark(a) => bench::run(a),
-        Cmd::Prepare { model, output, force, no_verify, dry_run } => cmd_prepare(&model, output, force, !no_verify, dry_run),
+        None => setup::model_or_default(None).and_then(|m| cmd_run(&m, &Overrides::default_for_setup(), None, false, 256, 0.7, 0, false, None)),
+        Some(cmd) => dispatch(cmd),
     };
     if let Err(e) = r {
         eprintln!("error: {e:#}");
         std::process::exit(1);
+    }
+}
+
+fn dispatch(cmd: Cmd) -> Result<()> {
+    let m = setup::model_or_default;
+    match cmd {
+        Cmd::Setup { model, repo, quant, model_file, dir, list, yes, reconfigure, serve, no_start, port } => {
+            let args = setup::SetupArgs { model, repo, quant, model_file, dir, list, yes, reconfigure, port };
+            match setup::run(args)? {
+                Some(path) if !no_start => {
+                    let p = path.to_string_lossy();
+                    let o = Overrides::default_for_setup();
+                    if serve {
+                        cmd_serve(&p, &o, "127.0.0.1", port, 512)
+                    } else {
+                        eprintln!("\nStarting the chat. Next time: `kestrel chat`, or `kestrel serve` for the OpenAI-compatible API.");
+                        cmd_run(&p, &o, None, false, 512, 0.7, 0, false, None)
+                    }
+                }
+                _ => Ok(()),
+            }
+        }
+        Cmd::Status => setup::status(),
+        Cmd::Models => cmd_models(),
+        Cmd::Inspect { model, json, tensors } => cmd_inspect(&m(model)?, json, tensors),
+        Cmd::Hardware { bench, path, json } => cmd_hardware(bench, path, json),
+        Cmd::Plan { model, o, json } => cmd_plan(&m(model)?, &o, json),
+        Cmd::Run { model, o, prompt, raw, max_tokens, temperature, seed, stats, system } => cmd_run(&m(model)?, &o, prompt, raw, max_tokens, temperature, seed, stats, system),
+        Cmd::Serve { model, o, host, port, max_tokens } => cmd_serve(&m(model)?, &o, &host, port, max_tokens),
+        Cmd::Benchmark(a) => bench::run(a),
+        Cmd::Prepare { model, output, force, no_verify, dry_run } => cmd_prepare(&model, output, force, !no_verify, dry_run),
     }
 }
 
