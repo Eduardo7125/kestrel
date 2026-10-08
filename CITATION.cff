@@ -1,0 +1,27 @@
+cff-version: 1.2.0
+message: "If you use Kestrel in your research, please cite it as below."
+title: "Kestrel: Memory-Tiered Local LLM Inference across VRAM, RAM and NVMe"
+type: software
+authors:
+  - name: "The Kestrel Authors"
+repository-code: "https://github.com/eduardo7125/kestrel"
+url: "https://github.com/eduardo7125/kestrel"
+license: Apache-2.0
+version: 0.1.0
+date-released: "2026-10-08"
+keywords:
+  - large language models
+  - LLM inference
+  - offloading
+  - NVMe
+  - memory tiering
+  - mixture of experts
+  - GGUF
+  - llama.cpp
+  - Rust
+abstract: >-
+  Kestrel is a local LLM inference runtime that profiles the machine and the
+  model, builds an explicit execution plan placing each tensor group in VRAM,
+  RAM or NVMe, and executes it with an inference-specific memory scheduler:
+  budgeted allocation, prefetching, Belady-optimal residency for dense layers
+  and an expert-granular cache for Mixture-of-Experts models.

@@ -104,7 +104,7 @@ pub struct Overrides {
     /// KV cache type (llama.cpp backend): f16, q8_0.
     #[arg(long, default_value = "f16")]
     pub kv_type: String,
-    /// Disk cache budget (reserved for re-packed layouts; GGUF is read in place).
+    /// Disk budget for derived files (not used yet; see `kestrel prepare` for re-packed models).
     #[arg(long, value_parser = parse_size)]
     pub disk_cache: Option<u64>,
     /// Streamed groups loaded ahead of use (0 = no prefetch).

@@ -1,3 +1,4 @@
 /target
 *.gguf
 /benchmarks/results/*.tmp
+*.kgguf

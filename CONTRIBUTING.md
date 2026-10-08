@@ -63,3 +63,11 @@ each fast path against the reference.
 Describe what changed, why, and how it was validated. Include benchmark
 output for anything performance-related, in the minimum report format of
 `benchmarks/README.md`.
+
+## License of contributions
+
+Kestrel is licensed under the [Apache License 2.0](LICENSE). Unless you
+explicitly state otherwise, any contribution you intentionally submit for
+inclusion is licensed under the same terms, without additional terms or
+conditions (Apache-2.0, section 5). Security issues go through
+[SECURITY.md](SECURITY.md), not public issues.

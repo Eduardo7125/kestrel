@@ -6,7 +6,13 @@ members = ["crates/*"]
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
+authors = ["The Kestrel Authors"]
 repository = "https://github.com/eduardo7125/kestrel"
+homepage = "https://github.com/eduardo7125/kestrel"
+documentation = "https://github.com/eduardo7125/kestrel/tree/main/docs"
+readme = "README.md"
+keywords = ["llm", "inference", "gguf", "offloading", "mixture-of-experts"]
+categories = ["science", "command-line-utilities", "memory-management", "filesystem"]
 rust-version = "1.87"
 
 [workspace.dependencies]

@@ -1,0 +1,15 @@
+Kestrel
+Copyright 2026 The Kestrel Authors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Kestrel reads the GGUF file format and the ggml quantization formats defined
+by the ggml / llama.cpp projects (MIT License, Copyright (c) 2023-2026 The ggml
+authors). The native kernels are independent implementations of those
+published formats; no ggml or llama.cpp source code is included. The optional
+llama.cpp backend runs llama.cpp binaries that the user installs separately.
+
+The design of the expert cache and several scheduling mechanisms were informed
+by a source-level study of Colibrì (https://github.com/JustVugg/colibri,
+Apache License 2.0); see
+docs/colibri-analysis.md. No Colibrì source code is included.
