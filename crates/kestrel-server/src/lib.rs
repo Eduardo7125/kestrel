@@ -103,7 +103,11 @@ struct AppState {
     control: Option<Arc<Control>>,
     ctl: Arc<Mutex<ControlState>>,
     shutdown: Arc<tokio::sync::Notify>,
+    knowledge: Option<SharedKnowledge>,
 }
+
+/// The knowledge base consulted before chat requests.
+pub type SharedKnowledge = Arc<Mutex<kestrel_knowledge::KnowledgeBase>>;
 
 pub struct ServeOptions {
     pub default_max_tokens: usize,
@@ -111,6 +115,8 @@ pub struct ServeOptions {
     pub extra_info: Value,
     /// Lets the dashboard reload, unload, tune and stop the model.
     pub control: Option<Control>,
+    /// Notes and files consulted before every chat request.
+    pub knowledge: Option<SharedKnowledge>,
 }
 
 fn describe(sess: &dyn InferenceSession, extra: &Value) -> Loaded {
@@ -150,6 +156,7 @@ fn build(session: SharedSession, opts: ServeOptions) -> (Router, Arc<tokio::sync
         control: opts.control.map(Arc::new),
         ctl: Arc::new(Mutex::new(ControlState { phase: "loaded", message: None, settings, tune_running: false, tune_log: Vec::new(), tune_result: None })),
         shutdown: shutdown.clone(),
+        knowledge: opts.knowledge,
     };
     let r = Router::new()
         .route("/", get(|| async { ([("content-type", "text/html; charset=utf-8"), ("cache-control", "no-cache")], DASHBOARD) }))
@@ -163,6 +170,14 @@ fn build(session: SharedSession, opts: ServeOptions) -> (Router, Arc<tokio::sync
         .route("/api/load", post(api_load))
         .route("/api/tune", post(api_tune))
         .route("/api/shutdown", post(api_shutdown))
+        .route("/api/knowledge", get(kb_status))
+        .route("/api/knowledge/settings", post(kb_settings))
+        .route("/api/knowledge/sources", post(kb_add_source))
+        .route("/api/knowledge/sources/remove", post(kb_remove_source))
+        .route("/api/knowledge/sync", post(kb_sync))
+        .route("/api/knowledge/search", post(kb_search))
+        .route("/api/knowledge/upload", post(kb_upload))
+        .route("/api/knowledge/uploads/delete", post(kb_delete_upload))
         .route("/health", get(|| async { Json(json!({"status": "ok"})) }))
         .route("/v1/models", get(models))
         .route("/v1/chat/completions", post(chat))
@@ -407,6 +422,76 @@ async fn api_shutdown(State(s): State<AppState>, h: HeaderMap) -> Response {
     Json(json!({"phase": "stopping"})).into_response()
 }
 
+// ---------------------------------------------------------------- knowledge
+
+/// Run `f` on the knowledge base off the async workers (it reads files).
+async fn with_kb<T: Send + 'static>(s: &AppState, f: impl FnOnce(&mut kestrel_knowledge::KnowledgeBase) -> Result<T, String> + Send + 'static) -> Result<T, Response> {
+    let Some(kb) = s.knowledge.clone() else {
+        return Err(err(StatusCode::NOT_IMPLEMENTED, "this server was started without a knowledge base"));
+    };
+    match tokio::task::spawn_blocking(move || f(&mut kb.lock().unwrap())).await {
+        Ok(Ok(v)) => Ok(v),
+        Ok(Err(e)) => Err(err(StatusCode::BAD_REQUEST, e)),
+        Err(e) => Err(err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+    }
+}
+
+async fn kb_status(State(s): State<AppState>) -> Response {
+    match with_kb(&s, |kb| Ok(kb.status())).await {
+        Ok(st) => Json(st).into_response(),
+        Err(r) => r,
+    }
+}
+
+macro_rules! kb_post {
+    ($name:ident, $body:ty, |$kb:ident, $b:ident| $e:expr) => {
+        async fn $name(State(s): State<AppState>, h: HeaderMap, Json($b): Json<$body>) -> Response {
+            if let Err(r) = check_origin(&h) {
+                return r;
+            }
+            match with_kb(&s, move |$kb| $e).await {
+                Ok(v) => Json(v).into_response(),
+                Err(r) => r,
+            }
+        }
+    };
+}
+
+#[derive(Deserialize)]
+struct SourceReq {
+    path: String,
+    kind: Option<kestrel_knowledge::SourceKind>,
+}
+#[derive(Deserialize)]
+struct IdReq {
+    id: String,
+}
+#[derive(Deserialize)]
+struct SearchReq {
+    query: String,
+    k: Option<usize>,
+}
+#[derive(Deserialize)]
+struct UploadReq {
+    name: String,
+    content: String,
+}
+#[derive(Deserialize)]
+struct NameReq {
+    name: String,
+}
+
+kb_post!(kb_settings, kestrel_knowledge::Settings, |kb, b| kb.set_settings(b).map(|_| kb.status()).map_err(|e| e.to_string()));
+kb_post!(kb_add_source, SourceReq, |kb, b| kb.add_source(std::path::Path::new(b.path.trim()), b.kind).map(|_| kb.status()).map_err(|e| e.to_string()));
+kb_post!(kb_remove_source, IdReq, |kb, b| kb.remove_source(&b.id).map(|_| kb.status()).map_err(|e| e.to_string()));
+kb_post!(kb_sync, Value, |kb, _b| {
+    kb.sync();
+    Ok(kb.status())
+});
+kb_post!(kb_search, SearchReq, |kb, b| Ok(kb.search(&b.query, b.k.unwrap_or(6).clamp(1, 20))));
+kb_post!(kb_upload, UploadReq, |kb, b| kb.save_upload(&b.name, &b.content).map(|name| json!({"name": name, "status": kb.status()})).map_err(|e| e.to_string()));
+kb_post!(kb_delete_upload, NameReq, |kb, b| kb.delete_upload(&b.name).map(|_| kb.status()).map_err(|e| e.to_string()));
+
 fn not_loaded(s: &AppState) -> Response {
     let c = s.ctl.lock().unwrap();
     let msg = match c.phase {
@@ -492,6 +577,14 @@ struct ChatReq {
     messages: Vec<InMessage>,
     #[serde(flatten)]
     common: Common,
+    /// Kestrel extensions: `{"knowledge": false}` skips the knowledge base.
+    #[serde(default)]
+    kestrel: Option<KestrelOpts>,
+}
+
+#[derive(Deserialize, Default)]
+struct KestrelOpts {
+    knowledge: Option<bool>,
 }
 
 #[derive(Deserialize)]
@@ -547,7 +640,28 @@ fn timings(st: &GenStats) -> Value {
 }
 
 async fn chat(State(s): State<AppState>, Json(req): Json<ChatReq>) -> Response {
-    let messages: Vec<ChatMessage> = req.messages.iter().map(|m| ChatMessage { role: m.role.clone(), content: m.content.text() }).collect();
+    let mut messages: Vec<ChatMessage> = req.messages.iter().map(|m| ChatMessage { role: m.role.clone(), content: m.content.text() }).collect();
+    // Consult the knowledge base with the user's latest message.
+    let mut sources = Value::Null;
+    let wanted = req.kestrel.as_ref().and_then(|k| k.knowledge).unwrap_or(true);
+    if let (Some(kb), true) = (s.knowledge.clone(), wanted) {
+        let query = messages.iter().rev().find(|m| m.role == "user").map(|m| m.content.clone()).unwrap_or_default();
+        let found = tokio::task::spawn_blocking(move || {
+            let mut kb = kb.lock().unwrap();
+            if kb.settings().enabled && !query.trim().is_empty() { kb.context_for(&query) } else { None }
+        })
+        .await
+        .ok()
+        .flatten();
+        if let Some((context, hits)) = found {
+            sources = json!(hits.iter().map(|h| json!({"title": h.title, "path": h.path, "heading": h.heading, "source": h.source, "uri": h.uri, "score": h.score})).collect::<Vec<_>>());
+            // One system message: chat templates handle that best.
+            match messages.first_mut() {
+                Some(m) if m.role == "system" => m.content = format!("{}\n\n{context}", m.content),
+                _ => messages.insert(0, ChatMessage { role: "system".into(), content: context }),
+            }
+        }
+    }
     let session = s.session.clone();
     let prompt = tokio::task::spawn_blocking(move || {
         let guard = session.lock().unwrap();
@@ -560,7 +674,7 @@ async fn chat(State(s): State<AppState>, Json(req): Json<ChatReq>) -> Response {
         Ok(None) => return not_loaded(&s),
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     };
-    run(s, prompt, req.common, true).await
+    run(s, prompt, req.common, true, sources).await
 }
 
 async fn completions(State(s): State<AppState>, Json(req): Json<CompletionReq>) -> Response {
@@ -577,10 +691,10 @@ async fn completions(State(s): State<AppState>, Json(req): Json<CompletionReq>) 
         Ok(None) => return not_loaded(&s),
         Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
     };
-    run(s, prompt, req.common, false).await
+    run(s, prompt, req.common, false, Value::Null).await
 }
 
-async fn run(s: AppState, prompt: Vec<u32>, common: Common, is_chat: bool) -> Response {
+async fn run(s: AppState, prompt: Vec<u32>, common: Common, is_chat: bool, sources: Value) -> Response {
     let params = common.params(s.default_max_tokens);
     let id = format!("{}-{}", if is_chat { "chatcmpl" } else { "cmpl" }, now());
     let created = now();
@@ -605,11 +719,14 @@ async fn run(s: AppState, prompt: Vec<u32>, common: Common, is_chat: bool) -> Re
                 } else {
                     json!({"index": 0, "text": text, "finish_reason": finish(&st)})
                 };
-                Json(json!({
+                let mut body = json!({
                     "id": id, "object": if is_chat {"chat.completion"} else {"text_completion"},
                     "created": created, "model": model, "choices": [choice], "usage": usage(&st), "timings": timings(&st),
-                }))
-                .into_response()
+                });
+                if !sources.is_null() {
+                    body["kestrel_sources"] = sources;
+                }
+                Json(body).into_response()
             }
             Ok(Err(e)) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
             Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
@@ -629,7 +746,11 @@ async fn run(s: AppState, prompt: Vec<u32>, common: Common, is_chat: bool) -> Re
             }
         };
         if is_chat {
-            let _ = tx.send(chunk(json!({"role": "assistant", "content": ""}), Value::Null));
+            let mut first = chunk(json!({"role": "assistant", "content": ""}), Value::Null);
+            if !sources.is_null() {
+                first["kestrel_sources"] = sources;
+            }
+            let _ = tx.send(first);
         }
         let mut guard = session.lock().unwrap();
         let res = match guard.as_mut() {
@@ -754,7 +875,7 @@ mod tests {
 
     fn app() -> (SharedSession, Router) {
         let s: SharedSession = shared(Box::new(Mock));
-        let r = router(s.clone(), ServeOptions { default_max_tokens: 16, extra_info: json!({"hardware": {"cores": 8}}), control: None });
+        let r = router(s.clone(), ServeOptions { default_max_tokens: 16, extra_info: json!({"hardware": {"cores": 8}}), control: None, knowledge: None });
         (s, r)
     }
 
@@ -840,7 +961,7 @@ mod tests {
             settings: json!({"threads": null}),
         };
         let s = shared(Box::new(Mock));
-        let r = router(s.clone(), ServeOptions { default_max_tokens: 16, extra_info: json!({}), control: Some(control) });
+        let r = router(s.clone(), ServeOptions { default_max_tokens: 16, extra_info: json!({}), control: Some(control), knowledge: None });
 
         let (st, v) = post(&r, "/api/plan", r#"{"threads": 4}"#).await;
         assert_eq!((st, v["threads"].as_u64()), (StatusCode::OK, Some(4)));
@@ -893,6 +1014,63 @@ mod tests {
         // Without a Control, the dashboard cannot manage the model.
         let (st, _) = post(&r, "/api/unload", "{}").await;
         assert_eq!(st, StatusCode::NOT_IMPLEMENTED);
+    }
+
+    /// Generates its own prompt back, to see what the model was given.
+    struct Echo;
+    impl InferenceSession for Echo {
+        fn model_name(&self) -> &str {
+            "echo"
+        }
+        fn render_chat(&self, messages: &[ChatMessage]) -> anyhow::Result<String> {
+            Ok(messages.iter().map(|m| format!("<{}>{}", m.role, m.content)).collect())
+        }
+        fn tokenize(&self, text: &str) -> Vec<u32> {
+            text.chars().map(u32::from).collect()
+        }
+        fn generate(&mut self, prompt: &[u32], _: &GenParams, on_text: &mut dyn FnMut(&str) -> bool) -> anyhow::Result<GenStats> {
+            let text: String = prompt.iter().filter_map(|&c| char::from_u32(c)).collect();
+            on_text(&text);
+            Ok(GenStats { generated: 1, ..Default::default() })
+        }
+        fn status(&self) -> Value {
+            json!({})
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn chat_consults_the_knowledge_base() {
+        let d = tempfile::tempdir().unwrap();
+        let kb = Arc::new(Mutex::new(kestrel_knowledge::KnowledgeBase::open(d.path()).unwrap()));
+        let r = router(shared(Box::new(Echo)), ServeOptions { default_max_tokens: 16, extra_info: json!({}), control: None, knowledge: Some(kb) });
+
+        let (st, v) = post(&r, "/api/knowledge/upload", r##"{"name": "Contrato.md", "content": "# Alquiler\nEl alquiler vence el 30 de junio."}"##).await;
+        assert_eq!(st, StatusCode::OK, "{v}");
+        let (_, hits) = post(&r, "/api/knowledge/search", r#"{"query": "alquiler"}"#).await;
+        assert_eq!(hits[0]["title"], "Contrato");
+
+        let ask = r#"{"messages":[{"role":"system","content":"Sé breve."},{"role":"user","content":"¿Cuándo vence el alquiler?"}]}"#;
+        let (_, v) = post(&r, "/v1/chat/completions", ask).await;
+        let seen = v["choices"][0]["message"]["content"].as_str().unwrap();
+        // One system message: the user's, followed by the notes.
+        assert!(seen.starts_with("<system>Sé breve."), "{seen}");
+        assert_eq!(seen.matches("<system>").count(), 1);
+        assert!(seen.contains("[[Contrato]]") && seen.contains("vence el 30 de junio"), "{seen}");
+        assert_eq!(v["kestrel_sources"][0]["title"], "Contrato");
+
+        // Per request opt-out, and the global switch.
+        let (_, v) = post(&r, "/v1/chat/completions", r#"{"messages":[{"role":"user","content":"alquiler"}],"kestrel":{"knowledge":false}}"#).await;
+        assert!(v.get("kestrel_sources").is_none());
+        post(&r, "/api/knowledge/settings", r#"{"enabled": false, "top_k": 4, "max_context_chars": 3000}"#).await;
+        let (_, v) = post(&r, "/v1/chat/completions", ask).await;
+        assert!(!v["choices"][0]["message"]["content"].as_str().unwrap().contains("Contrato"));
+
+        // Bad input is refused with a message, not a crash.
+        let (st, v) = post(&r, "/api/knowledge/sources", r#"{"path": "/does/not/exist"}"#).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
+        assert!(v["error"]["message"].as_str().unwrap().contains("does not exist"));
+        let (st, _) = post(&r, "/api/knowledge/upload", r#"{"name": "a.exe", "content": "x"}"#).await;
+        assert_eq!(st, StatusCode::BAD_REQUEST);
     }
 
     #[tokio::test]

@@ -15,6 +15,7 @@ rust-version.workspace = true
 kestrel-backends.workspace = true
 kestrel-engine.workspace = true
 kestrel-hw.workspace = true
+kestrel-knowledge.workspace = true
 axum.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
@@ -23,4 +24,5 @@ serde_json.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]
+tempfile.workspace = true
 tower = { version = "0.5", features = ["util"] }

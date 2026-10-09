@@ -317,6 +317,7 @@ Models are found by path, or by (partial) name in `$KESTREL_MODELS`,
 | `kestrel` / `kestrel chat [model]` | Chat with the default model, or answer one prompt with `-p` |
 | `kestrel status` | The configured model and whether the API server is running |
 | `kestrel stop` | Stop a running server and free its memory |
+| `kestrel knowledge add\|list\|search\|remove\|enable\|disable` | Manage the notes the model consults: Obsidian vaults, folders |
 | `kestrel models` | List local GGUF and prepared models |
 | `kestrel inspect <model> [--tensors] [--json]` | Architecture, parameters, quantization, KV size, memory estimates, native support |
 | `kestrel hardware [--bench] [--path DIR] [--json]` | Hardware discovery; `--bench` measures RAM, disk and kernel bandwidths |
@@ -410,6 +411,8 @@ from a CDN.
 | **Performance** | Generation speed per request, time to first token, prompt processing, and where each request's time went (matrix products, attention, waiting for weights), with a table of every request |
 | **Plan** | The execution plan: strategy, estimated against measured speed, budgets, the alternatives that were rejected and why, model and hardware |
 | **Connect** | Base URL, model id and copy-ready snippets for curl, Python and JavaScript |
+| **Knowledge** | Connect your Obsidian vault or any folder, or drop files in. Before every answer Kestrel looks up the most relevant passages and gives them to the model, which cites them; the chat shows the notes used, with links that open them in Obsidian. Try a search to see what the model would receive |
+| **Training** | The three ways to teach the model (knowledge, custom instructions, fine-tuning) side by side; custom instructions; a dataset builder (save good chat answers as examples, edit them, export JSONL) and the path to fine-tune with it and run the result in Kestrel |
 | **Settings** | Change threads, RAM budget, context, prefetch, disk reads, the expert cache, router lookahead and the memory guard; preview the plan for the new values (strategy, estimated speed, what goes to disk) before applying; apply to reload the model with them. Run the autotuner with live progress. Unload the model to free its memory, load it again, or shut Kestrel down |
 
 ![Experts page: 12 layers × 128 experts, cached experts filled, experts on disk outlined](docs/media/dashboard-experts.png)
@@ -427,6 +430,22 @@ what is resident, streamed or being read; the Plan page puts the estimated
 speed next to the measured one; and every view reads a lock-free monitor, so
 it keeps updating while a request is generating. Colibrì has pages Kestrel
 does not (System One, the measured expert atlas) and more languages.
+
+### Your notes: Obsidian and other knowledge
+
+```bash
+kestrel knowledge add ~/Documents/MyVault     # or Knowledge → Connect in the dashboard
+```
+
+Before every chat message, Kestrel searches the connected vaults, folders
+and uploaded files, gives the model the most relevant passages, and lists
+the notes it used, with links that open them in Obsidian. Edits are picked
+up within 20 seconds. This is retrieval, not training: the model reads your
+current notes for each question and can cite them. It works with any model
+and nothing leaves the machine. To change *how* the model writes rather than
+what it knows, see the Training page and [docs/training.md](docs/training.md),
+which covers custom instructions, building a fine-tuning dataset in the
+dashboard, training a LoRA adapter, and running the result in Kestrel.
 
 ### OpenAI-compatible API
 
@@ -462,6 +481,11 @@ for chunk in reply:
 | `POST /api/apply` · `/api/unload` · `/api/load` | Reload with new settings · free the model's memory · load it again |
 | `POST /api/tune` | Unload, run the autotuner, reload with its result |
 | `POST /api/shutdown` | Stop the server |
+| `GET /api/knowledge` · `POST /api/knowledge/{settings,sources,sources/remove,sync,search,upload,uploads/delete}` | Knowledge base: status, settings, sources, search, uploads |
+
+Chat requests consult the knowledge base unless the request says
+`"kestrel": {"knowledge": false}`; the passages used come back in
+`kestrel_sources`.
 
 Control endpoints accept only `Content-Type: application/json` requests
 whose `Origin` (when a browser sends one) is the server itself, so another
@@ -655,6 +679,7 @@ Details: [docs/roadmap.md](docs/roadmap.md).
 | [Scheduler design](docs/scheduler-design.md) | Placement, prefetch, caching, expert cache, autotuning |
 | [Backend strategy](docs/backend-strategy.md) | Native executor and llama.cpp adapter |
 | [Prepared format](docs/prepared-format.md) | The `kestrel prepare` container |
+| [Training](docs/training.md) | Knowledge vs instructions vs fine-tuning; Obsidian; building a dataset; LoRA |
 | [Benchmark plan](docs/benchmark-plan.md) | Methodology and benchmark arms |
 | [Technology decisions](docs/technology-decisions.md) | Why Rust, GGUF, and the other choices |
 | [MVP specification](docs/mvp-spec.md) | Scope of the first release |

@@ -24,6 +24,7 @@ kestrel-planner.workspace = true
 kestrel-engine.workspace = true
 kestrel-backends.workspace = true
 kestrel-server.workspace = true
+kestrel-knowledge.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 serde.workspace = true
