@@ -225,8 +225,22 @@ kestrel web              # dashboard in the browser + OpenAI-compatible API
 kestrel                  # chat in the terminal
 kestrel serve            # API and dashboard, without opening a browser
 kestrel status           # the configured model, and whether the server is running
+kestrel stop             # stop the server and free its memory
 kestrel setup --reconfigure   # switch to another model
 ```
+
+### Stopping Kestrel
+
+The model stays in memory for as long as Kestrel runs. Closing the browser
+tab does **not** stop it. To stop it and free its RAM, do any of these:
+
+- press **Ctrl+C** in the terminal where it runs, or close that window (on
+  Windows, the black console window that `START-HERE.bat` opened);
+- run `kestrel stop` from any terminal;
+- in the dashboard, **Settings → Shut down Kestrel**.
+
+To free the memory but keep the dashboard open, use **Settings → Unload
+model**, and **Load model** when you need it again.
 
 Every command also takes a model file or name, for example
 `kestrel chat ~/models/Qwen2.5-7B-Instruct-Q4_K_M.gguf`. `-h` shows the
@@ -302,6 +316,7 @@ Models are found by path, or by (partial) name in `$KESTREL_MODELS`,
 | `kestrel setup [--list] [--model ID] [--repo R]` | Pick, download and configure a model (what `start-here.sh` runs) |
 | `kestrel` / `kestrel chat [model]` | Chat with the default model, or answer one prompt with `-p` |
 | `kestrel status` | The configured model and whether the API server is running |
+| `kestrel stop` | Stop a running server and free its memory |
 | `kestrel models` | List local GGUF and prepared models |
 | `kestrel inspect <model> [--tensors] [--json]` | Architecture, parameters, quantization, KV size, memory estimates, native support |
 | `kestrel hardware [--bench] [--path DIR] [--json]` | Hardware discovery; `--bench` measures RAM, disk and kernel bandwidths |
@@ -395,6 +410,7 @@ from a CDN.
 | **Performance** | Generation speed per request, time to first token, prompt processing, and where each request's time went (matrix products, attention, waiting for weights), with a table of every request |
 | **Plan** | The execution plan: strategy, estimated against measured speed, budgets, the alternatives that were rejected and why, model and hardware |
 | **Connect** | Base URL, model id and copy-ready snippets for curl, Python and JavaScript |
+| **Settings** | Change threads, RAM budget, context, prefetch, disk reads, the expert cache, router lookahead and the memory guard; preview the plan for the new values (strategy, estimated speed, what goes to disk) before applying; apply to reload the model with them. Run the autotuner with live progress. Unload the model to free its memory, load it again, or shut Kestrel down |
 
 ![Experts page: 12 layers × 128 experts, cached experts filled, experts on disk outlined](docs/media/dashboard-experts.png)
 
@@ -441,6 +457,16 @@ for chunk in reply:
 | `GET /` | The web dashboard |
 | `GET /api/info` | Model, execution plan, placement of every tensor group, hardware |
 | `GET /api/live` | Live memory, residency, read ring, caches and the last 60 requests (`?experts=1` adds the per-expert map); answers while a request is generating |
+| `GET /api/control` | Model state (loaded, loading, unloaded, tuning, error), current settings, autotune progress |
+| `POST /api/plan` | Plan for the posted settings, without loading |
+| `POST /api/apply` · `/api/unload` · `/api/load` | Reload with new settings · free the model's memory · load it again |
+| `POST /api/tune` | Unload, run the autotuner, reload with its result |
+| `POST /api/shutdown` | Stop the server |
+
+Control endpoints accept only `Content-Type: application/json` requests
+whose `Origin` (when a browser sends one) is the server itself, so another
+website cannot unload or stop a local Kestrel. The server still has no
+authentication: keep it on localhost.
 
 ### Configuration reference
 
