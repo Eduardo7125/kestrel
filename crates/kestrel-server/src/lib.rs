@@ -6,7 +6,13 @@
 //! GET  /v1/models
 //! GET  /health
 //! GET  /metrics               (Prometheus text; ?format=json for JSON)
+//! GET  /                      the web dashboard (embedded in the binary)
+//! GET  /api/info              model, plan, placement and hardware (static)
+//! GET  /api/live              memory, residency, caches, turn history (?experts=1 adds the expert map)
 //! ```
+//!
+//! The dashboard and `/api/live` read the session's monitor, which never
+//! takes the session lock, so they stay responsive while a request generates.
 //!
 //! Generation runs on a blocking thread; requests are served one at a time
 //! per model (the MVP does not batch concurrent requests).
@@ -17,7 +23,7 @@ use axum::response::sse::{Event, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use kestrel_backends::InferenceSession;
+use kestrel_backends::{InferenceSession, Monitor};
 use kestrel_engine::{ChatMessage, GenParams, GenStats, SamplerConfig};
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -34,12 +40,36 @@ struct AppState {
     session: SharedSession,
     model_id: String,
     default_max_tokens: usize,
+    monitor: Option<Monitor>,
+    info: Arc<Value>,
 }
 
-pub fn router(session: SharedSession, default_max_tokens: usize) -> Router {
-    let model_id = session.lock().unwrap().model_name().to_string();
-    let state = AppState { session, model_id, default_max_tokens };
+pub struct ServeOptions {
+    pub default_max_tokens: usize,
+    /// Merged into `/api/info` (the CLI adds the hardware profile).
+    pub extra_info: Value,
+}
+
+const DASHBOARD: &str = include_str!("../web/index.html");
+const LOGO: &[u8] = include_bytes!("../../../assets/logo.png");
+
+pub fn router(session: SharedSession, opts: ServeOptions) -> Router {
+    let (model_id, monitor, mut info) = {
+        let s = session.lock().unwrap();
+        (s.model_name().to_string(), s.monitor(), s.info())
+    };
+    if let (Some(dst), Some(src)) = (info.as_object_mut(), opts.extra_info.as_object()) {
+        for (k, v) in src {
+            dst.insert(k.clone(), v.clone());
+        }
+    }
+    info["server"] = json!({"version": env!("CARGO_PKG_VERSION"), "model_id": model_id});
+    let state = AppState { session, model_id, default_max_tokens: opts.default_max_tokens, monitor, info: Arc::new(info) };
     Router::new()
+        .route("/", get(|| async { ([("content-type", "text/html; charset=utf-8"), ("cache-control", "no-cache")], DASHBOARD) }))
+        .route("/logo.png", get(|| async { ([("content-type", "image/png"), ("cache-control", "max-age=86400")], LOGO) }))
+        .route("/api/info", get(api_info))
+        .route("/api/live", get(api_live))
         .route("/health", get(|| async { Json(json!({"status": "ok"})) }))
         .route("/v1/models", get(models))
         .route("/v1/chat/completions", post(chat))
@@ -48,9 +78,9 @@ pub fn router(session: SharedSession, default_max_tokens: usize) -> Router {
         .with_state(state)
 }
 
-pub async fn serve(session: SharedSession, addr: &str, default_max_tokens: usize) -> anyhow::Result<()> {
+pub async fn serve(session: SharedSession, addr: &str, opts: ServeOptions) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    axum::serve(listener, router(session, default_max_tokens)).with_graceful_shutdown(async {
+    axum::serve(listener, router(session, opts)).with_graceful_shutdown(async {
         let _ = tokio::signal::ctrl_c().await;
     })
     .await?;
@@ -182,7 +212,7 @@ fn finish(st: &GenStats) -> &'static str {
 }
 
 fn timings(st: &GenStats) -> Value {
-    json!({"prompt_ms": st.prefill_s * 1e3, "predicted_ms": st.decode_s * 1e3, "predicted_per_second": st.decode_tok_s, "prompt_per_second": st.prompt_tok_s, "memory": st.memory})
+    json!({"prompt_ms": st.prefill_s * 1e3, "ttft_ms": st.ttft_s * 1e3, "predicted_ms": st.decode_s * 1e3, "predicted_per_second": st.decode_tok_s, "prompt_per_second": st.prompt_tok_s, "memory": st.memory})
 }
 
 async fn chat(State(s): State<AppState>, Json(req): Json<ChatReq>) -> Response {
@@ -277,11 +307,37 @@ async fn run(s: AppState, prompt: Vec<u32>, common: Common, is_chat: bool) -> Re
     Sse::new(stream).into_response()
 }
 
+async fn api_info(State(s): State<AppState>) -> Json<Value> {
+    Json((*s.info).clone())
+}
+
+async fn api_live(State(s): State<AppState>, Query(q): Query<HashMap<String, String>>) -> Response {
+    let with_experts = q.get("experts").is_some_and(|v| v == "1" || v == "true");
+    match &s.monitor {
+        Some(m) => {
+            let m = m.clone();
+            match tokio::task::spawn_blocking(move || m(with_experts)).await {
+                Ok(v) => Json(v).into_response(),
+                Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+            }
+        }
+        None => Json(json!({"busy": s.session.try_lock().is_err()})).into_response(),
+    }
+}
+
 async fn metrics(State(s): State<AppState>, Query(q): Query<HashMap<String, String>>) -> Response {
-    let status = match s.session.try_lock() {
+    let mut status = match s.session.try_lock() {
         Ok(sess) => sess.status(),
         Err(_) => json!({"busy": true}),
     };
+    // While a request generates, the session is locked: take memory and
+    // store figures from the lock-free monitor instead.
+    if let (Some(m), Some(obj)) = (&s.monitor, status.as_object_mut()) {
+        let live = m(false);
+        obj.entry("rss_bytes").or_insert(live["rss"].clone());
+        obj.entry("ram_budget").or_insert(live["ram"].clone());
+        obj.entry("store").or_insert(live["store"].clone());
+    }
     if q.get("format").map(String::as_str) == Some("json") {
         return Json(status).into_response();
     }
@@ -305,4 +361,102 @@ async fn metrics(State(s): State<AppState>, Query(q): Query<HashMap<String, Stri
     put("prompt_tokens_total", "Prompt tokens", f("/totals/prompt_tokens"));
     put("decode_tokens_per_second", "Decode speed of the last request", f("/totals/last_decode_tok_s"));
     ([("content-type", "text/plain; version=0.0.4")], out).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::{to_bytes, Body};
+    use axum::http::Request;
+    use tower::ServiceExt;
+
+    struct Mock;
+    impl InferenceSession for Mock {
+        fn model_name(&self) -> &str {
+            "mock-model"
+        }
+        fn render_chat(&self, messages: &[ChatMessage]) -> anyhow::Result<String> {
+            Ok(messages.iter().map(|m| m.content.clone()).collect::<Vec<_>>().join("\n"))
+        }
+        fn tokenize(&self, text: &str) -> Vec<u32> {
+            text.bytes().map(u32::from).collect()
+        }
+        fn generate(&mut self, _: &[u32], _: &GenParams, on_text: &mut dyn FnMut(&str) -> bool) -> anyhow::Result<GenStats> {
+            for p in ["he", "llo"] {
+                if !on_text(p) {
+                    break;
+                }
+            }
+            Ok(GenStats { generated: 2, ..Default::default() })
+        }
+        fn status(&self) -> Value {
+            json!({"rss_bytes": 1})
+        }
+        fn info(&self) -> Value {
+            json!({"model": {"name": "mock-model"}})
+        }
+        fn monitor(&self) -> Option<Monitor> {
+            Some(Arc::new(|experts| json!({"busy": false, "experts_requested": experts})))
+        }
+    }
+
+    fn app() -> (SharedSession, Router) {
+        let s: SharedSession = Arc::new(Mutex::new(Box::new(Mock)));
+        let r = router(s.clone(), ServeOptions { default_max_tokens: 16, extra_info: json!({"hardware": {"cores": 8}}) });
+        (s, r)
+    }
+
+    async fn get(r: &Router, uri: &str) -> (StatusCode, String, String) {
+        let resp = r.clone().oneshot(Request::get(uri).body(Body::empty()).unwrap()).await.unwrap();
+        let ct = resp.headers().get("content-type").map(|v| v.to_str().unwrap().to_string()).unwrap_or_default();
+        let status = resp.status();
+        let body = to_bytes(resp.into_body(), 1 << 24).await.unwrap();
+        (status, ct, String::from_utf8_lossy(&body).into_owned())
+    }
+
+    #[tokio::test]
+    async fn serves_the_dashboard_and_logo() {
+        let (_, r) = app();
+        let (st, ct, body) = get(&r, "/").await;
+        assert_eq!(st, StatusCode::OK);
+        assert!(ct.starts_with("text/html"));
+        assert!(body.contains("<title>Kestrel</title>") && body.contains("/api/live") && body.trim_end().ends_with("</html>"));
+        let (st, ct, _) = get(&r, "/logo.png").await;
+        assert_eq!((st, ct.as_str()), (StatusCode::OK, "image/png"));
+    }
+
+    #[tokio::test]
+    async fn info_merges_hardware_and_server() {
+        let (_, r) = app();
+        let (_, _, body) = get(&r, "/api/info").await;
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["model"]["name"], "mock-model");
+        assert_eq!(v["hardware"]["cores"], 8);
+        assert_eq!(v["server"]["model_id"], "mock-model");
+    }
+
+    #[tokio::test]
+    async fn live_answers_while_the_session_is_generating() {
+        let (s, r) = app();
+        // Hold the session lock, as a running generation does.
+        let guard = s.lock().unwrap();
+        let (st, _, body) = tokio::time::timeout(std::time::Duration::from_secs(5), get(&r, "/api/live?experts=1")).await.expect("/api/live must not wait for the session");
+        drop(guard);
+        assert_eq!(st, StatusCode::OK);
+        let v: Value = serde_json::from_str(&body).unwrap();
+        assert_eq!(v["experts_requested"], true);
+    }
+
+    #[tokio::test]
+    async fn chat_completion_still_works() {
+        let (_, r) = app();
+        let req = Request::post("/v1/chat/completions")
+            .header("content-type", "application/json")
+            .body(Body::from(r#"{"messages":[{"role":"user","content":"hi"}]}"#))
+            .unwrap();
+        let resp = r.oneshot(req).await.unwrap();
+        let body = to_bytes(resp.into_body(), 1 << 20).await.unwrap();
+        let v: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["choices"][0]["message"]["content"], "hello");
+    }
 }

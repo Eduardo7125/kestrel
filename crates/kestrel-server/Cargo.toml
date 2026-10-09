@@ -20,3 +20,6 @@ tokio-stream.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

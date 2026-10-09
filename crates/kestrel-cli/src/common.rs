@@ -55,6 +55,16 @@ pub enum ExpertPolicyArg {
 }
 
 impl Overrides {
+    /// Every option at its default, as if none were given.
+    pub fn default_for_setup() -> Self {
+        #[derive(clap::Parser)]
+        struct Wrap {
+            #[command(flatten)]
+            o: Overrides,
+        }
+        <Wrap as clap::Parser>::parse_from(["kestrel"]).o
+    }
+
     pub fn native_options(&self) -> kestrel_backends::NativeOptions {
         kestrel_backends::NativeOptions {
             adaptive: !self.no_adapt,
@@ -99,59 +109,59 @@ pub struct Overrides {
     #[arg(long, value_parser = parse_size)]
     pub ram_budget: Option<u64>,
     /// Upper bound for the KV cache, e.g. 2G (limits the context).
-    #[arg(long = "kv-cache", value_parser = parse_size)]
+    #[arg(long = "kv-cache", value_parser = parse_size, hide_short_help = true)]
     pub kv_cache: Option<u64>,
     /// KV cache type (llama.cpp backend): f16, q8_0.
-    #[arg(long, default_value = "f16")]
+    #[arg(long, default_value = "f16", hide_short_help = true)]
     pub kv_type: String,
     /// Disk budget for derived files (not used yet; see `kestrel prepare` for re-packed models).
-    #[arg(long, value_parser = parse_size)]
+    #[arg(long, value_parser = parse_size, hide_short_help = true)]
     pub disk_cache: Option<u64>,
     /// Streamed groups loaded ahead of use (0 = no prefetch).
-    #[arg(long)]
+    #[arg(long, hide_short_help = true)]
     pub prefetch_depth: Option<usize>,
     /// Streaming I/O mode.
-    #[arg(long, value_enum)]
+    #[arg(long, value_enum, hide_short_help = true)]
     pub io: Option<IoArg>,
     /// I/O worker threads.
-    #[arg(long)]
+    #[arg(long, hide_short_help = true)]
     pub io_workers: Option<usize>,
     /// Ring eviction policy (lru is an ablation).
-    #[arg(long, value_enum, default_value = "belady")]
+    #[arg(long, value_enum, default_value = "belady", hide_short_help = true)]
     pub policy: PolicyArg,
     /// Force a strategy.
-    #[arg(long, value_enum)]
+    #[arg(long, value_enum, hide_short_help = true)]
     pub strategy: Option<StrategyArg>,
     /// Forbid NVMe streaming.
-    #[arg(long)]
+    #[arg(long, hide_short_help = true)]
     pub no_stream: bool,
     /// Where streamed groups sit in the layer order.
-    #[arg(long, value_enum, default_value = "interleaved")]
+    #[arg(long, value_enum, default_value = "interleaved", hide_short_help = true)]
     pub placement: PlacementArg,
     /// Compute threads (default: physical cores).
     #[arg(long, short = 't')]
     pub threads: Option<usize>,
     /// Allow budgets larger than currently available memory.
-    #[arg(long)]
+    #[arg(long, hide_short_help = true)]
     pub allow_overcommit: bool,
     /// Disable the memory guard (no demotion under pressure, no restore).
-    #[arg(long)]
+    #[arg(long, hide_short_help = true)]
     pub no_adapt: bool,
     /// Also promote streamed layers beyond the plan when memory frees up
     /// (default: the plan is static; only pressure demotions are undone).
-    #[arg(long, conflicts_with = "no_adapt")]
+    #[arg(long, conflicts_with = "no_adapt", hide_short_help = true)]
     pub adapt: bool,
     /// Expert-cache policy for MoE models (lru is an ablation).
-    #[arg(long, value_enum, default_value = "lfru")]
+    #[arg(long, value_enum, default_value = "lfru", hide_short_help = true)]
     pub expert_policy: ExpertPolicyArg,
     /// Do not load or save the expert usage history (MoE warm start).
-    #[arg(long)]
+    #[arg(long, hide_short_help = true)]
     pub no_usage_history: bool,
     /// Ignore a saved `kestrel benchmark --tune` profile.
-    #[arg(long)]
+    #[arg(long, hide_short_help = true)]
     pub no_tune_profile: bool,
     /// Skip the automatic first-run hardware benchmark.
-    #[arg(long)]
+    #[arg(long, hide_short_help = true)]
     pub no_bench: bool,
 }
 
@@ -284,9 +294,9 @@ pub fn resolve_model(arg: &str) -> Result<PathBuf> {
     }
     bail!(
         "model '{arg}' not found locally.\n\
-         Kestrel never downloads anything without being asked. Download a GGUF, e.g.\n\
-         \x20 huggingface-cli download <repo>-GGUF --include '*Q4_K_M*.gguf' --local-dir {}\n\
-         or pass a path, or set KESTREL_MODELS to your model directories.",
+         Get one with `kestrel setup` (it lists the models that fit this machine and downloads\n\
+         the one you pick), or pass a GGUF path, or set KESTREL_MODELS to your model directories.\n\
+         Models in {} are found by name.",
         kestrel_hw::cache_dir().join("models").display()
     )
 }

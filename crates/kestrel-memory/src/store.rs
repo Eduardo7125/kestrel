@@ -388,6 +388,13 @@ impl WeightStore {
         st.placement.iter().map(|p| matches!(p, Placement::Resident(_))).collect()
     }
 
+    /// The group held by each streaming-ring slot, and whether its read is
+    /// still in flight.
+    pub fn ring_contents(&self) -> Vec<Option<(usize, bool)>> {
+        let st = self.inner.state.lock().unwrap();
+        st.slots.iter().map(|s| s.group.map(|g| (g, s.ticket.as_ref().is_some_and(|t| !t.is_done())))).collect()
+    }
+
     /// Lease a group's bytes, loading it if necessary. Leasing a streamed
     /// group triggers prefetch of the following streamed groups.
     pub fn lease(&self, group: usize) -> Result<Lease, StoreError> {

@@ -2,8 +2,10 @@
 
 mod bench;
 mod common;
+mod download;
+mod setup;
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use common::{gb, Overrides};
 use kestrel_backends::{InferenceSession, NativeSession};
@@ -15,19 +17,65 @@ use std::io::{BufRead, Write};
 use std::sync::{Arc, Mutex};
 
 #[derive(Parser)]
-#[command(name = "kestrel", version, about = "Local LLM runtime that plans across VRAM, RAM and NVMe")]
+#[command(
+    name = "kestrel",
+    version,
+    about = "Local LLM runtime that plans across VRAM, RAM and NVMe",
+    after_help = "Getting started: ./start-here.sh (or `kestrel setup`) picks, downloads and starts a model.\nThen `kestrel chat` or `kestrel serve`. Plain `kestrel` opens the chat."
+)]
 struct Cli {
     #[command(subcommand)]
-    cmd: Cmd,
+    cmd: Option<Cmd>,
 }
 
 #[derive(Subcommand)]
 enum Cmd {
+    /// Pick a model that fits this machine, download it and make it the default.
+    Setup {
+        /// Install this catalog model (see --list) without asking.
+        #[arg(long)]
+        model: Option<String>,
+        /// Any Hugging Face GGUF repository (owner/name) instead of the catalog.
+        #[arg(long)]
+        repo: Option<String>,
+        /// Quantization to download.
+        #[arg(long, default_value = setup::DEFAULT_QUANT)]
+        quant: String,
+        /// Use a GGUF already on disk.
+        #[arg(long, value_name = "PATH")]
+        model_file: Option<std::path::PathBuf>,
+        /// Where to keep models (default: ~/.cache/kestrel/models).
+        #[arg(long)]
+        dir: Option<std::path::PathBuf>,
+        /// Show every catalog model against this machine, then stop.
+        #[arg(long)]
+        list: bool,
+        /// No questions: take the recommendation.
+        #[arg(long, short = 'y')]
+        yes: bool,
+        /// Choose another model even if one is configured.
+        #[arg(long)]
+        reconfigure: bool,
+        /// After setup: serve the API without opening the browser.
+        #[arg(long)]
+        serve: bool,
+        /// After setup: chat in this terminal instead of the web dashboard.
+        #[arg(long, conflicts_with = "serve")]
+        chat: bool,
+        /// After setup: stop instead of starting the model.
+        #[arg(long)]
+        no_start: bool,
+        #[arg(long, default_value_t = 8080)]
+        port: u16,
+    },
+    /// Show the configured model and whether the API server is running.
+    Status,
     /// List local GGUF models (KESTREL_MODELS, ~/.cache/kestrel/models, ./models).
     Models,
     /// Describe a model: architecture, tensors, quantization, memory needs.
     Inspect {
-        model: String,
+        /// Model file or name (default: the one `setup` configured).
+        model: Option<String>,
         #[arg(long)]
         json: bool,
         /// List every tensor.
@@ -46,15 +94,18 @@ enum Cmd {
     },
     /// Show the execution plan Kestrel would use.
     Plan {
-        model: String,
+        /// Model file or name (default: the one `setup` configured).
+        model: Option<String>,
         #[command(flatten)]
         o: Overrides,
         #[arg(long)]
         json: bool,
     },
-    /// Run a model: one prompt (-p) or an interactive chat.
+    /// Chat with a model, or answer one prompt (-p).
+    #[command(visible_alias = "chat")]
     Run {
-        model: String,
+        /// Model file or name (default: the one `setup` configured).
+        model: Option<String>,
         #[command(flatten)]
         o: Overrides,
         /// Prompt; omit for interactive chat.
@@ -76,9 +127,26 @@ enum Cmd {
         #[arg(long)]
         system: Option<String>,
     },
-    /// Serve an OpenAI-compatible API.
+    /// Open the web dashboard (chat, memory, experts, performance) and serve the API.
+    Web {
+        /// Model file or name (default: the one `setup` configured).
+        model: Option<String>,
+        #[command(flatten)]
+        o: Overrides,
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        #[arg(long, default_value_t = 8080)]
+        port: u16,
+        #[arg(long, default_value_t = 2048)]
+        max_tokens: usize,
+        /// Do not open a browser.
+        #[arg(long)]
+        no_browser: bool,
+    },
+    /// Serve the OpenAI-compatible API (the dashboard is at the same address).
     Serve {
-        model: String,
+        /// Model file or name (default: the one `setup` configured).
+        model: Option<String>,
         #[command(flatten)]
         o: Overrides,
         #[arg(long, default_value = "127.0.0.1")]
@@ -117,18 +185,44 @@ fn main() {
     }
     let cli = Cli::parse();
     let r = match cli.cmd {
-        Cmd::Models => cmd_models(),
-        Cmd::Inspect { model, json, tensors } => cmd_inspect(&model, json, tensors),
-        Cmd::Hardware { bench, path, json } => cmd_hardware(bench, path, json),
-        Cmd::Plan { model, o, json } => cmd_plan(&model, &o, json),
-        Cmd::Run { model, o, prompt, raw, max_tokens, temperature, seed, stats, system } => cmd_run(&model, &o, prompt, raw, max_tokens, temperature, seed, stats, system),
-        Cmd::Serve { model, o, host, port, max_tokens } => cmd_serve(&model, &o, &host, port, max_tokens),
-        Cmd::Benchmark(a) => bench::run(a),
-        Cmd::Prepare { model, output, force, no_verify, dry_run } => cmd_prepare(&model, output, force, !no_verify, dry_run),
+        None => setup::model_or_default(None).and_then(|m| cmd_run(&m, &Overrides::default_for_setup(), None, false, 256, 0.7, 0, false, None)),
+        Some(cmd) => dispatch(cmd),
     };
     if let Err(e) = r {
         eprintln!("error: {e:#}");
         std::process::exit(1);
+    }
+}
+
+fn dispatch(cmd: Cmd) -> Result<()> {
+    let m = setup::model_or_default;
+    match cmd {
+        Cmd::Setup { model, repo, quant, model_file, dir, list, yes, reconfigure, serve, chat, no_start, port } => {
+            let args = setup::SetupArgs { model, repo, quant, model_file, dir, list, yes, reconfigure, port };
+            match setup::run(args)? {
+                Some(path) if !no_start => {
+                    let p = path.to_string_lossy();
+                    let o = Overrides::default_for_setup();
+                    if chat {
+                        eprintln!("\nStarting the chat. Next time: `kestrel chat`, or `kestrel web` for the dashboard.");
+                        cmd_run(&p, &o, None, false, 512, 0.7, 0, false, None)
+                    } else {
+                        cmd_serve(&p, &o, "127.0.0.1", port, 512, !serve)
+                    }
+                }
+                _ => Ok(()),
+            }
+        }
+        Cmd::Status => setup::status(),
+        Cmd::Models => cmd_models(),
+        Cmd::Inspect { model, json, tensors } => cmd_inspect(&m(model)?, json, tensors),
+        Cmd::Hardware { bench, path, json } => cmd_hardware(bench, path, json),
+        Cmd::Plan { model, o, json } => cmd_plan(&m(model)?, &o, json),
+        Cmd::Run { model, o, prompt, raw, max_tokens, temperature, seed, stats, system } => cmd_run(&m(model)?, &o, prompt, raw, max_tokens, temperature, seed, stats, system),
+        Cmd::Serve { model, o, host, port, max_tokens } => cmd_serve(&m(model)?, &o, &host, port, max_tokens, false),
+        Cmd::Web { model, o, host, port, max_tokens, no_browser } => cmd_serve(&m(model)?, &o, &host, port, max_tokens, !no_browser),
+        Cmd::Benchmark(a) => bench::run(a),
+        Cmd::Prepare { model, output, force, no_verify, dry_run } => cmd_prepare(&model, output, force, !no_verify, dry_run),
     }
 }
 
@@ -476,7 +570,25 @@ fn cmd_run(arg: &str, o: &Overrides, prompt: Option<String>, raw: bool, max_toke
     Ok(())
 }
 
-fn cmd_serve(arg: &str, o: &Overrides, host: &str, port: u16, max_tokens: usize) -> Result<()> {
+/// Open `url` in the default browser, without failing when there is none.
+fn open_browser(url: &str) {
+    let url = url.to_string();
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(700));
+        let r = if cfg!(target_os = "macos") {
+            std::process::Command::new("open").arg(&url).status()
+        } else if cfg!(windows) {
+            std::process::Command::new("cmd").args(["/C", "start", "", &url]).status()
+        } else {
+            std::process::Command::new("xdg-open").arg(&url).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()).status()
+        };
+        if !r.is_ok_and(|s| s.success()) {
+            eprintln!("  (could not open a browser here; open {url} yourself)");
+        }
+    });
+}
+
+fn cmd_serve(arg: &str, o: &Overrides, host: &str, port: u16, max_tokens: usize, browser: bool) -> Result<()> {
     let (_, _, p) = make_plan(arg, o, false)?;
     if p.chosen.backend == Backend::LlamaCpp {
         eprint!("{}", p.text());
@@ -488,11 +600,28 @@ fn cmd_serve(arg: &str, o: &Overrides, host: &str, port: u16, max_tokens: usize)
         }
         return Ok(());
     }
-    let sess = load_native(arg, o)?;
-    eprintln!("serving {} on http://{host}:{port}/v1 (OpenAI-compatible; /metrics for Prometheus)", sess.model_name());
+    let mut sess = load_native(arg, o)?;
+    sess.enable_profile();
+    let hw = common::hardware(None, true, true);
+    let extra_info = serde_json::json!({ "hardware": {
+        "cpu": hw.cpu.model, "cores": hw.cpu.physical_cores, "threads": hw.cpu.logical_cores, "simd": hw.cpu.simd,
+        "ram_total": hw.ram.total, "gpus": hw.gpus.iter().map(|g| serde_json::json!({"name": g.name, "vram_total": g.vram_total})).collect::<Vec<_>>(),
+        "ram_bw": hw.measured.as_ref().map(|m| m.ram_read_bw), "os": hw.os,
+    }});
+    // Like Colibrì: when the port is taken, move to the next free one.
+    let port = (port..port.saturating_add(20)).find(|p| std::net::TcpListener::bind((host, *p)).is_ok()).with_context(|| format!("ports {port}-{} on {host} are all in use; pass --port", port.saturating_add(19)))?;
+    let base = format!("http://{}:{port}", if host == "0.0.0.0" { "127.0.0.1" } else { host });
+    eprintln!("\nKestrel is serving {}", sess.model_name());
+    eprintln!("  Dashboard:        {base}/");
+    eprintln!("  OpenAI base URL:  {base}/v1");
+    eprintln!("  Metrics:          {base}/metrics");
+    eprintln!("  stop: press Ctrl+C");
+    if browser {
+        open_browser(&format!("{base}/"));
+    }
     let shared: kestrel_server::SharedSession = Arc::new(Mutex::new(Box::new(sess) as Box<dyn InferenceSession>));
     let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build()?;
-    rt.block_on(kestrel_server::serve(shared, &format!("{host}:{port}"), max_tokens))
+    rt.block_on(kestrel_server::serve(shared, &format!("{host}:{port}"), kestrel_server::ServeOptions { default_max_tokens: max_tokens, extra_info }))
 }
 
 #[cfg(unix)]
