@@ -43,6 +43,7 @@
   --shadow: none;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }
 html, body { height: 100%; }
 body { margin: 0; background: var(--plane); color: var(--ink); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; }
 button, input, select, textarea { font: inherit; color: inherit; }
@@ -196,6 +197,29 @@ code { font: 12.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; ba
 .tab[aria-selected="true"] { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .offline { margin: 40px auto; max-width: 520px; text-align: center; color: var(--ink-2); }
+.form { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 14px 18px; }
+.field { display: flex; flex-direction: column; gap: 4px; font-size: 12.5px; color: var(--ink-2); }
+.field input, .field select { background: var(--surface-2); border: 1px solid var(--ring); border-radius: 8px; padding: 7px 9px; color: var(--ink); }
+.field small { color: var(--muted); font-size: 11.5px; }
+.switch { display: flex; align-items: flex-start; gap: 10px; font-size: 13px; color: var(--ink); cursor: pointer; }
+.switch input { width: 34px; height: 20px; appearance: none; background: var(--axis); border-radius: 999px; position: relative; flex: none; cursor: pointer; margin: 1px 0 0; transition: background .15s; }
+.switch input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: left .15s; }
+.switch input:checked { background: var(--accent); }
+.switch input:checked::after { left: 16px; }
+.switch small { display: block; color: var(--muted); font-size: 11.5px; }
+.btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.btn { border: 1px solid var(--ring); background: var(--surface-2); border-radius: 9px; padding: 8px 14px; font-weight: 500; }
+.btn:hover { background: var(--hover); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.btn.danger { color: var(--critical); }
+.btn:disabled { opacity: .45; cursor: default; }
+.banner { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 10px; background: var(--surface-2); border: 1px solid var(--ring); margin-bottom: 16px; font-size: 13px; }
+.banner .grow { flex: 1; }
+.banner.err { border-color: var(--critical); }
+.preview { margin-top: 14px; }
+.log { max-height: 260px; overflow: auto; white-space: pre-wrap; }
+.section-title { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 18px 0 8px; }
+.pill.clickable { cursor: pointer; }
 @media (max-width: 860px) {
   .app { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
   .rail { order: 2; flex-direction: row; border-right: 0; border-top: 1px solid var(--ring); padding: 6px; overflow-x: auto; }
@@ -221,6 +245,7 @@ code { font: 12.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; ba
     <button class="nav" data-view="performance"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></svg><span data-i18n="nav.performance"></span></button>
     <button class="nav" data-view="plan"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg><span data-i18n="nav.plan"></span></button>
     <button class="nav" data-view="connect"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg><span data-i18n="nav.connect"></span></button>
+    <button class="nav" data-view="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg><span data-i18n="nav.settings"></span></button>
     <div class="spacer"></div>
     <div class="rail-foot">
       <select id="lang" aria-label="Language"><option value="en">English</option><option value="es">Español</option></select>
@@ -274,6 +299,22 @@ const I18N = {
     "con.title": "Connect", "con.lede": "Kestrel speaks the OpenAI API, so most apps and SDKs work by changing the base URL. The server has no authentication: keep it on localhost or behind a proxy.",
     "con.base": "Base URL", "con.model": "Model id", "con.endpoints": "Endpoints",
     "mem.reserved": "{b} reserved", "mem.est": "plan estimate", "mem.lastreq": "last request", "plan.measured": "measured: {v} tok/s",
+    "nav.settings": "Settings",
+    "ph.loaded": "Ready", "ph.loading": "Loading the model…", "ph.unloading": "Unloading…", "ph.unloaded": "Model unloaded", "ph.tuning": "Autotuning…", "ph.error": "Load failed", "ph.stopping": "Stopping…",
+    "set.title": "Settings", "set.lede": "Change how Kestrel runs this model. Preview the plan first; applying reloads the model with the new settings.",
+    "set.model": "Model", "set.model.sub": "Free the memory without closing Kestrel, load the model again, or shut Kestrel down.",
+    "set.unload": "Unload model", "set.load": "Load model", "set.shutdown": "Shut down Kestrel", "set.shutdown.q": "Shut down Kestrel? The dashboard stops working until you start it again (kestrel web).", "set.stopped": "Kestrel has stopped. Start it again with kestrel web or start-here.",
+    "set.run": "Performance settings", "set.run.sub": "Empty fields are automatic: Kestrel picks them from this machine and the autotune profile.",
+    "f.threads": "Compute threads", "f.threads.h": "Physical cores is usually best", "f.ram": "RAM budget (GB)", "f.ram.h": "Free now: {a}. More RAM = fewer disk reads", "f.ctx": "Context (tokens)", "f.ctx.h": "Longer context uses more RAM for the KV cache",
+    "f.prefetch": "Prefetch depth", "f.prefetch.h": "Layers read ahead from disk", "f.io": "Disk reads", "f.io.h": "Direct skips the OS cache", "f.workers": "I/O workers", "f.workers.h": "Parallel disk reads",
+    "f.policy": "Expert cache policy", "f.policy.h": "LFRU keeps hot experts", "f.auto": "auto ({v})",
+    "f.lookahead": "Router lookahead", "f.lookahead.h": "Prefetch the experts the next layer will probably use", "f.guard": "Memory guard", "f.guard.h": "Free layers when the system runs low on memory",
+    "f.adapt": "Grow into free memory", "f.adapt.h": "Load more layers into RAM when memory frees up", "f.stream": "Stream from disk", "f.stream.h": "Off: refuse plans that read weights from disk",
+    "f.tune": "Use autotune profile", "f.tune.h": "Fill automatic fields with the measured best values",
+    "set.preview": "Preview plan", "set.apply": "Apply and reload", "set.reset": "Reset to automatic", "set.applying": "Reloading the model with the new settings…",
+    "set.est": "{s} · ~{t} tok/s estimated · {r} in RAM, {d} from disk", "set.reload.note": "Applying unloads the model and loads it again; the chat is unavailable for a moment.",
+    "tune.title": "Autotune", "tune.sub": "Measures threads, prefetch depth and I/O workers on this machine with this model. A change is kept only if the output stays identical and it is at least 3% faster. The model is unloaded while it runs (a few minutes) and reloaded with the result.",
+    "tune.run": "Run autotune", "tune.result": "Result",
     "yes": "yes", "no": "no", "loading": "Loading…", "notmoe": "This model is not a mixture of experts."
   },
   es: {
@@ -308,6 +349,22 @@ const I18N = {
     "con.title": "Conectar", "con.lede": "Kestrel habla la API de OpenAI: casi cualquier app o SDK funciona cambiando la URL base. El servidor no tiene autenticación: mantenlo en localhost o detrás de un proxy.",
     "con.base": "URL base", "con.model": "Id del modelo", "con.endpoints": "Endpoints",
     "mem.reserved": "{b} reservados", "mem.est": "estimación del plan", "mem.lastreq": "última petición", "plan.measured": "medido: {v} tok/s",
+    "nav.settings": "Ajustes",
+    "ph.loaded": "Listo", "ph.loading": "Cargando el modelo…", "ph.unloading": "Descargando…", "ph.unloaded": "Modelo descargado", "ph.tuning": "Autotune en curso…", "ph.error": "Error al cargar", "ph.stopping": "Apagando…",
+    "set.title": "Ajustes", "set.lede": "Cambia cómo ejecuta Kestrel este modelo. Previsualiza el plan primero; al aplicar, el modelo se recarga con los nuevos ajustes.",
+    "set.model": "Modelo", "set.model.sub": "Libera la memoria sin cerrar Kestrel, vuelve a cargar el modelo o apaga Kestrel.",
+    "set.unload": "Descargar modelo", "set.load": "Cargar modelo", "set.shutdown": "Apagar Kestrel", "set.shutdown.q": "¿Apagar Kestrel? El panel dejará de funcionar hasta que lo vuelvas a arrancar (kestrel web).", "set.stopped": "Kestrel se ha apagado. Vuelve a arrancarlo con kestrel web o start-here.",
+    "set.run": "Ajustes de rendimiento", "set.run.sub": "Los campos vacíos son automáticos: Kestrel los elige según esta máquina y el perfil de autotune.",
+    "f.threads": "Hilos de cálculo", "f.threads.h": "Lo mejor suele ser el nº de núcleos físicos", "f.ram": "Presupuesto de RAM (GB)", "f.ram.h": "Libre ahora: {a}. Más RAM = menos lecturas de disco", "f.ctx": "Contexto (tokens)", "f.ctx.h": "Más contexto usa más RAM para la caché KV",
+    "f.prefetch": "Profundidad de prefetch", "f.prefetch.h": "Capas leídas por adelantado del disco", "f.io": "Lecturas de disco", "f.io.h": "Direct evita la caché del sistema", "f.workers": "Hilos de E/S", "f.workers.h": "Lecturas de disco en paralelo",
+    "f.policy": "Política de la caché de expertos", "f.policy.h": "LFRU conserva los expertos más usados", "f.auto": "auto ({v})",
+    "f.lookahead": "Lookahead del router", "f.lookahead.h": "Precarga los expertos que probablemente usará la siguiente capa", "f.guard": "Guardián de memoria", "f.guard.h": "Libera capas si el sistema se queda sin memoria",
+    "f.adapt": "Crecer en la memoria libre", "f.adapt.h": "Carga más capas en RAM cuando se libera memoria", "f.stream": "Leer desde disco", "f.stream.h": "Desactivado: rechaza planes que lean pesos del disco",
+    "f.tune": "Usar perfil de autotune", "f.tune.h": "Rellena los campos automáticos con los mejores valores medidos",
+    "set.preview": "Previsualizar plan", "set.apply": "Aplicar y recargar", "set.reset": "Volver a automático", "set.applying": "Recargando el modelo con los nuevos ajustes…",
+    "set.est": "{s} · ~{t} tok/s estimados · {r} en RAM, {d} desde disco", "set.reload.note": "Al aplicar, el modelo se descarga y se vuelve a cargar; el chat no estará disponible un momento.",
+    "tune.title": "Autotune", "tune.sub": "Mide hilos, profundidad de prefetch e hilos de E/S en esta máquina con este modelo. Solo se queda con un cambio si la salida es idéntica y es al menos un 3% más rápido. El modelo se descarga mientras se ejecuta (unos minutos) y se recarga con el resultado.",
+    "tune.run": "Ejecutar autotune", "tune.result": "Resultado",
     "yes": "sí", "no": "no", "loading": "Cargando…", "notmoe": "Este modelo no es una mezcla de expertos."
   }
 };
@@ -404,6 +461,7 @@ async function poll() {
   try {
     const live = await getJSON("/api/live" + (wantExperts ? "?experts=1" : ""));
     if (!wantExperts && S.live && S.live.expert_map) live.expert_map = S.live.expert_map;
+    if (S.live && S.live.phase && S.live.phase !== "loaded" && live.phase === "loaded") loadInfo();
     S.live = live; S.online = true;
   } catch { S.online = false; }
   updateTopbar();
@@ -413,7 +471,10 @@ async function poll() {
 }
 function updateTopbar() {
   const pill = $("#tb-status"), dot = pill.firstElementChild, label = pill.lastElementChild;
-  if (!S.online) { dot.className = "dot err"; label.textContent = t("st.off"); }
+  const phase = S.live && S.live.phase;
+  pill.classList.add("clickable"); pill.onclick = () => go("settings");
+  if (!S.online) { dot.className = "dot err"; label.textContent = S.stopped ? t("set.stopped") : t("st.off"); }
+  else if (phase && phase !== "loaded") { dot.className = "dot " + (phase === "error" || phase === "unloaded" ? "err" : "busy"); label.textContent = t("ph." + phase); }
   else if (S.live && S.live.busy) { dot.className = "dot busy"; label.textContent = t("st.busy", { n: S.live.live_tokens }); }
   else { dot.className = "dot ok"; label.textContent = t("st.ready"); }
   const mem = $("#tb-mem");
@@ -436,11 +497,16 @@ function render() {
   if (S.view === "chat") return renderChat(view);
   const page = h("div", { class: "page" });
   view.replaceChildren(page);
-  const builders = { memory: buildMemory, experts: buildExperts, performance: buildPerformance, plan: buildPlan, connect: buildConnect };
+  const builders = { memory: buildMemory, experts: buildExperts, performance: buildPerformance, plan: buildPlan, connect: buildConnect, settings: buildSettings };
   (builders[S.view] || buildMemory)(page);
   renderLivePage();
 }
-function renderLivePage() { if (liveRenderers && S.live) for (const f of liveRenderers) f(S.live); }
+function renderLivePage() {
+  if (!liveRenderers || !S.live) return;
+  // While the model is unloaded only the Settings page has live data to show.
+  if (S.live.phase && S.live.phase !== "loaded" && S.view !== "settings") return;
+  for (const f of liveRenderers) f(S.live);
+}
 function tile(label, id, note) { return h("div", { class: "tile" }, h("div", { class: "label", text: label }), h("div", { class: "value", id }, "—"), note ? h("div", { class: "note", id: id + "-note" }) : null); }
 function setText(id, v) { const el = document.getElementById(id); if (el) el.textContent = v; }
 
@@ -728,6 +794,107 @@ function buildConnect(page) {
   const eps = [["POST", "/v1/chat/completions", "chat, streaming with \"stream\": true"], ["POST", "/v1/completions", "text completion"], ["GET", "/v1/models", "the loaded model"], ["GET", "/health", "liveness"], ["GET", "/metrics", "Prometheus (?format=json)"], ["GET", "/api/info", "model, plan, hardware"], ["GET", "/api/live", "memory and caches, live (?experts=1)"]];
   page.append(h("div", { class: "card", style: "margin-top:16px" }, h("h2", { text: t("con.endpoints") }), h("table", {}, h("tbody", {}, eps.map(([m, p, d]) => h("tr", {}, h("td", {}, h("code", { text: m })), h("td", {}, h("code", { text: p })), h("td", { text: d })))))));
 }
+
+// ---------------------------------------------------------------- settings page
+async function postJSON(url, body) {
+  const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+  let j = null; try { j = await r.json(); } catch {}
+  if (!r.ok) throw new Error((j && j.error && j.error.message) || r.statusText);
+  return j;
+}
+function buildSettings(page) {
+  const info = S.info || {}, plan = info.plan || {}, moe = info.model && info.model.moe;
+  page.append(h("h1", { text: t("set.title") }), h("p", { class: "lede", text: t("set.lede") }));
+  const banner = h("div", { class: "banner", hidden: true });
+  page.append(banner);
+  // model control
+  const unloadB = h("button", { class: "btn" }, t("set.unload")), loadB = h("button", { class: "btn primary" }, t("set.load")), stopB = h("button", { class: "btn danger" }, t("set.shutdown"));
+  page.append(h("div", { class: "card" }, h("h2", { text: t("set.model") }), h("p", { class: "sub", text: t("set.model.sub") }),
+    h("div", { class: "tiles", style: "margin:0" }, tile(t("mem.rss"), "c-rss"), tile("", "c-phase")), h("div", { class: "btns" }, loadB, unloadB, stopB)));
+  // settings form
+  const ctlState = { settings: {} };
+  const inputs = {};
+  const numField = (key, label, help, placeholder, step) => { const i = h("input", { type: "number", min: 0, step: step || 1, placeholder }); inputs[key] = i; return h("label", { class: "field" }, label, i, h("small", { text: help })); };
+  const sel = (key, label, help, opts) => { const i = h("select", {}, opts.map(([v, l]) => h("option", { value: v, text: l }))); inputs[key] = i; return h("label", { class: "field" }, label, i, h("small", { text: help })); };
+  const sw = (key, label, help) => { const i = h("input", { type: "checkbox", role: "switch" }); inputs[key] = i; return h("label", { class: "switch" }, i, h("span", {}, label, h("small", { text: help }))); };
+  const auto = v => t("f.auto", { v });
+  const ramAvail = plan.budgets ? bytes(plan.budgets.ram.available) : "—";
+  const form = h("div", { class: "form" },
+    numField("threads", t("f.threads"), t("f.threads.h") + ((info.hardware && info.hardware.cores) ? ` (${info.hardware.cores})` : ""), auto(plan.threads)),
+    numField("ram_budget_gb", t("f.ram"), t("f.ram.h", { a: ramAvail }), auto(plan.budgets ? num0(plan.budgets.ram.usable / 1e9) : "—"), 0.5),
+    numField("ctx", t("f.ctx"), t("f.ctx.h"), auto(plan.n_ctx), 256),
+    numField("prefetch_depth", t("f.prefetch"), t("f.prefetch.h"), auto(plan.prefetch_depth)),
+    sel("io", t("f.io"), t("f.io.h"), [["", auto(plan.io_mode || "direct")], ["direct", "direct"], ["buffered", "buffered"]]),
+    numField("io_workers", t("f.workers"), t("f.workers.h"), auto(8)),
+    moe ? sel("expert_policy", t("f.policy"), t("f.policy.h"), [["lfru", "LFRU"], ["lru", "LRU"]]) : null);
+  const switches = h("div", { class: "form", style: "margin-top:18px" },
+    moe ? sw("lookahead", t("f.lookahead"), t("f.lookahead.h")) : null,
+    sw("guard", t("f.guard"), t("f.guard.h")), sw("adapt", t("f.adapt"), t("f.adapt.h")), sw("stream", t("f.stream"), t("f.stream.h")), sw("tune_profile", t("f.tune"), t("f.tune.h")));
+  const previewBox = h("div", { class: "preview" });
+  const previewB = h("button", { class: "btn" }, t("set.preview")), applyB = h("button", { class: "btn primary" }, t("set.apply")), resetB = h("button", { class: "btn" }, t("set.reset"));
+  page.append(h("div", { class: "card", style: "margin-top:16px" }, h("h2", { text: t("set.run") }), h("p", { class: "sub", text: t("set.run.sub") }), form, switches,
+    h("div", { class: "btns" }, previewB, applyB, resetB), h("p", { class: "sub", style: "margin:8px 0 0", text: t("set.reload.note") }), previewBox));
+  // autotune
+  const tuneB = h("button", { class: "btn primary" }, t("tune.run")), tuneLog = h("pre", { class: "log", hidden: true }), tuneRes = h("div", { class: "warn", hidden: true });
+  page.append(h("div", { class: "card", style: "margin-top:16px" }, h("h2", { text: t("tune.title") }), h("p", { class: "sub", text: t("tune.sub") }), h("div", { class: "btns", style: "margin-top:0" }, tuneB), tuneRes, tuneLog));
+
+  function fill(st) {
+    const v = st || {};
+    for (const k of ["threads", "ram_budget_gb", "ctx", "prefetch_depth", "io_workers"]) if (inputs[k]) inputs[k].value = v[k] === null || v[k] === undefined ? "" : v[k];
+    if (inputs.io) inputs.io.value = v.io || "";
+    if (inputs.expert_policy) inputs.expert_policy.value = v.expert_policy || "lfru";
+    const def = { lookahead: true, guard: true, adapt: false, stream: true, tune_profile: true };
+    for (const k of Object.keys(def)) if (inputs[k]) inputs[k].checked = v[k] === null || v[k] === undefined ? def[k] : !!v[k];
+  }
+  function read() {
+    const o = {};
+    for (const k of ["threads", "ctx", "prefetch_depth", "io_workers"]) { const x = inputs[k].value.trim(); o[k] = x === "" ? null : Math.max(0, Math.round(Number(x))); }
+    const g = inputs.ram_budget_gb.value.trim(); o.ram_budget_gb = g === "" ? null : Number(g);
+    o.io = inputs.io.value || null;
+    o.expert_policy = inputs.expert_policy ? inputs.expert_policy.value : "lfru";
+    for (const k of ["lookahead", "guard", "adapt", "stream", "tune_profile"]) o[k] = inputs[k] ? inputs[k].checked : (k === "lookahead");
+    return o;
+  }
+  function showBanner(text, kind, action) { banner.hidden = !text; banner.className = "banner" + (kind === "err" ? " err" : ""); banner.replaceChildren(...[icon(kind === "err" ? "warn" : "regen"), h("span", { class: "grow", text: text || "" }), action].filter(Boolean)); }
+  previewB.onclick = async () => {
+    previewB.disabled = true; previewBox.replaceChildren(h("div", { class: "sub", text: t("loading") }));
+    try {
+      const p = await postJSON("/api/plan", read());
+      previewBox.replaceChildren(
+        h("div", { class: "warn" }, icon("regen"), h("span", { text: t("set.est", { s: p.strategy, t: num0(p.tok_s, 1), r: bytes(p.ram_weights), d: bytes(p.disk_weights) }) })),
+        ...(p.warnings || []).map(w => h("div", { class: "warn" }, icon("warn"), h("span", { text: w }))),
+        h("details", {}, h("summary", { text: t("plan.full") }), h("pre", { text: p.text || "" })));
+    } catch (e) { previewBox.replaceChildren(h("div", { class: "warn" }, icon("warn"), h("pre", { style: "margin:0;border:0;padding:0;background:none", text: e.message }))); }
+    previewB.disabled = false;
+  };
+  applyB.onclick = async () => { try { await postJSON("/api/apply", read()); showBanner(t("set.applying")); } catch (e) { showBanner(e.message, "err"); } refresh(); };
+  resetB.onclick = () => { fill({}); previewBox.replaceChildren(); };
+  unloadB.onclick = async () => { try { await postJSON("/api/unload"); } catch (e) { showBanner(e.message, "err"); } refresh(); };
+  loadB.onclick = async () => { try { await postJSON("/api/load"); } catch (e) { showBanner(e.message, "err"); } refresh(); };
+  stopB.onclick = async () => { if (!confirm(t("set.shutdown.q"))) return; try { await postJSON("/api/shutdown"); S.stopped = true; showBanner(t("set.stopped"), "err"); } catch (e) { showBanner(e.message, "err"); } };
+  tuneB.onclick = async () => { try { await postJSON("/api/tune"); } catch (e) { showBanner(e.message, "err"); } refresh(); };
+
+  let filled = false, lastPhase = null;
+  async function refresh() {
+    let c; try { c = await getJSON("/api/control"); } catch { if (S.stopped) showBanner(t("set.stopped"), "err"); return; }
+    if (!c.controllable) { for (const b of [unloadB, loadB, applyB, tuneB, previewB]) b.disabled = true; }
+    if (!filled) { fill(c.settings); filled = true; }
+    const busyPhase = ["loading", "unloading", "tuning", "stopping"].includes(c.phase);
+    setText("c-phase", t("ph." + c.phase)); const lbl = document.getElementById("c-phase"); if (lbl) lbl.previousElementSibling.textContent = t("set.model");
+    unloadB.hidden = c.phase !== "loaded"; loadB.hidden = !(c.phase === "unloaded" || c.phase === "error");
+    for (const b of [unloadB, loadB, applyB, tuneB]) b.disabled = busyPhase || !c.controllable;
+    if (c.phase === "error") showBanner(c.message || t("ph.error"), "err", null);
+    else if (busyPhase) showBanner(t("ph." + c.phase));
+    else if (lastPhase && lastPhase !== c.phase && c.phase === "loaded") { showBanner(""); loadInfo(); }
+    else if (!S.stopped) showBanner("");
+    lastPhase = c.phase;
+    if (c.tune_log && c.tune_log.length) { tuneLog.hidden = false; tuneLog.textContent = c.tune_log.join("\n"); tuneLog.scrollTop = tuneLog.scrollHeight; }
+    if (c.tune_result) { tuneRes.hidden = false; tuneRes.replaceChildren(icon("regen"), h("span", { text: t("tune.result") + ": " + c.tune_result })); }
+  }
+  refresh();
+  liveRenderers = [live => { setText("c-rss", bytes(live.rss)); refresh(); }];
+}
+function num0(x, d = 0) { return num(x, d); }
 
 // ---------------------------------------------------------------- markdown (safe)
 function esc(x) { return x.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }

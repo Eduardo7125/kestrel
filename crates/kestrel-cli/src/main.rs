@@ -4,6 +4,7 @@ mod bench;
 mod common;
 mod download;
 mod setup;
+mod web;
 
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
@@ -14,7 +15,7 @@ use kestrel_gguf::GgmlType;
 use kestrel_model::GroupKind;
 use kestrel_planner::Backend;
 use std::io::{BufRead, Write};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 #[derive(Parser)]
 #[command(
@@ -70,6 +71,8 @@ enum Cmd {
     },
     /// Show the configured model and whether the API server is running.
     Status,
+    /// Stop a running `kestrel web` / `kestrel serve` and free its memory.
+    Stop,
     /// List local GGUF models (KESTREL_MODELS, ~/.cache/kestrel/models, ./models).
     Models,
     /// Describe a model: architecture, tensors, quantization, memory needs.
@@ -214,6 +217,7 @@ fn dispatch(cmd: Cmd) -> Result<()> {
             }
         }
         Cmd::Status => setup::status(),
+        Cmd::Stop => web::stop(),
         Cmd::Models => cmd_models(),
         Cmd::Inspect { model, json, tensors } => cmd_inspect(&m(model)?, json, tensors),
         Cmd::Hardware { bench, path, json } => cmd_hardware(bench, path, json),
@@ -432,7 +436,7 @@ fn cmd_hardware(bench: bool, path: Option<std::path::PathBuf>, json: bool) -> Re
     Ok(())
 }
 
-fn make_plan(arg: &str, o: &Overrides, quiet: bool) -> Result<(kestrel_gguf::GgufFile, Arc<kestrel_model::ModelDesc>, kestrel_planner::ExecutionPlan)> {
+pub(crate) fn make_plan(arg: &str, o: &Overrides, quiet: bool) -> Result<(kestrel_gguf::GgufFile, Arc<kestrel_model::ModelDesc>, kestrel_planner::ExecutionPlan)> {
     let (g, m) = common::open_model(arg)?;
     let hw = common::hardware(Some(&m), o.no_bench, quiet);
     let req = o.request_with(&m, &hw)?;
@@ -600,8 +604,12 @@ fn cmd_serve(arg: &str, o: &Overrides, host: &str, port: u16, max_tokens: usize,
         }
         return Ok(());
     }
-    let mut sess = load_native(arg, o)?;
-    sess.enable_profile();
+    let settings = web::WebSettings::from_overrides(o);
+    let sess = {
+        let (_, m, p) = make_plan(arg, o, false)?;
+        eprintln!("kestrel: {} · {} · {} resident, {} streamed · ctx {}", m.name, p.chosen.kind.label(), gb(p.chosen.ram_weights), gb(p.chosen.disk_weights), p.n_ctx);
+        web::load(arg, &settings.apply(o)?, &settings)?
+    };
     let hw = common::hardware(None, true, true);
     let extra_info = serde_json::json!({ "hardware": {
         "cpu": hw.cpu.model, "cores": hw.cpu.physical_cores, "threads": hw.cpu.logical_cores, "simd": hw.cpu.simd,
@@ -615,13 +623,19 @@ fn cmd_serve(arg: &str, o: &Overrides, host: &str, port: u16, max_tokens: usize,
     eprintln!("  Dashboard:        {base}/");
     eprintln!("  OpenAI base URL:  {base}/v1");
     eprintln!("  Metrics:          {base}/metrics");
-    eprintln!("  stop: press Ctrl+C");
+    eprintln!("  stop: press Ctrl+C here, `kestrel stop`, or Settings → Shut down in the dashboard");
     if browser {
         open_browser(&format!("{base}/"));
     }
-    let shared: kestrel_server::SharedSession = Arc::new(Mutex::new(Box::new(sess) as Box<dyn InferenceSession>));
+    let model_name = sess.model_name().to_string();
+    let shared = kestrel_server::shared(Box::new(sess) as Box<dyn InferenceSession>);
+    let control = web::control(arg.to_string(), o.clone());
+    web::ServerFile::write(&base, &model_name);
     let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build()?;
-    rt.block_on(kestrel_server::serve(shared, &format!("{host}:{port}"), kestrel_server::ServeOptions { default_max_tokens: max_tokens, extra_info }))
+    let res = rt.block_on(kestrel_server::serve(shared, &format!("{host}:{port}"), kestrel_server::ServeOptions { default_max_tokens: max_tokens, extra_info, control: Some(control) }));
+    web::ServerFile::remove_own();
+    eprintln!("Kestrel stopped; the model's memory is free.");
+    res
 }
 
 #[cfg(unix)]

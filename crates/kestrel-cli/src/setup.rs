@@ -317,8 +317,13 @@ fn finish(model: PathBuf, catalog_id: Option<String>, repo: Option<String>, port
 
 /// `kestrel status`: the configured model and whether a server answers.
 pub fn status() -> Result<()> {
+    let server = crate::web::running_url();
+    match &server {
+        Some(url) => println!("server    running · dashboard {url}/ · OpenAI base URL {url}/v1 · stop with `kestrel stop`"),
+        None => println!("server    not running (start it with `kestrel web`)"),
+    }
     let Some(c) = SetupConfig::load() else {
-        println!("not set up: run ./start-here.sh (or `kestrel setup`)");
+        println!("model     not set up: run ./start-here.sh (or `kestrel setup`)");
         return Ok(());
     };
     let present = c.model.is_file();
@@ -328,9 +333,6 @@ pub fn status() -> Result<()> {
             println!("size      {}", gb(md.len()));
         }
     }
-    let url = format!("http://127.0.0.1:{}", c.port);
-    let up = ureq::AgentBuilder::new().timeout(std::time::Duration::from_secs(2)).build().get(&format!("{url}/health")).call().is_ok();
-    println!("server    {}", if up { format!("running · OpenAI base URL {url}/v1") } else { format!("not running (start it with `kestrel serve`; it will listen on {url})") });
     println!("chat      kestrel chat");
     Ok(())
 }

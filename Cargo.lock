@@ -762,6 +762,7 @@ dependencies = [
  "axum",
  "kestrel-backends",
  "kestrel-engine",
+ "kestrel-hw",
  "serde",
  "serde_json",
  "tokio",
