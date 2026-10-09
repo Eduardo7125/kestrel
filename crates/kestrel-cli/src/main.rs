@@ -73,6 +73,11 @@ enum Cmd {
     Status,
     /// Stop a running `kestrel web` / `kestrel serve` and free its memory.
     Stop,
+    /// Notes and files the model consults before answering (Obsidian vaults, folders).
+    Knowledge {
+        #[command(subcommand)]
+        cmd: KnowledgeCmd,
+    },
     /// List local GGUF models (KESTREL_MODELS, ~/.cache/kestrel/models, ./models).
     Models,
     /// Describe a model: architecture, tensors, quantization, memory needs.
@@ -197,6 +202,64 @@ fn main() {
     }
 }
 
+#[derive(Subcommand)]
+enum KnowledgeCmd {
+    /// Show the connected sources and how much is indexed.
+    List,
+    /// Connect an Obsidian vault or any folder of text files.
+    Add { path: std::path::PathBuf },
+    /// Disconnect a source (by the id `list` shows).
+    Remove { id: String },
+    /// Show what would be given to the model for a question.
+    Search { query: Vec<String> },
+    /// Turn consulting the knowledge before each answer on or off.
+    Enable,
+    Disable,
+}
+
+fn knowledge_base() -> Result<kestrel_knowledge::KnowledgeBase> {
+    Ok(kestrel_knowledge::KnowledgeBase::open(kestrel_hw::cache_dir().join("knowledge"))?)
+}
+
+fn cmd_knowledge(cmd: KnowledgeCmd) -> Result<()> {
+    let mut kb = knowledge_base()?;
+    let note = "a running server picks the change up within 20 s";
+    match cmd {
+        KnowledgeCmd::List => {
+            let st = kb.status();
+            println!("consult before answering: {} · {} passages per answer · up to {} characters", if st.settings.enabled { "on" } else { "off" }, st.settings.top_k, st.settings.max_context_chars);
+            for s in &st.sources {
+                println!("  {:<10} {:<8} {:<28} {:>5} files {:>6} passages  {}{}", s.source.id, format!("{:?}", s.source.kind).to_lowercase(), s.source.name, s.files, s.passages, s.source.path.display(), s.error.as_ref().map(|e| format!("  ({e})")).unwrap_or_default());
+            }
+        }
+        KnowledgeCmd::Add { path } => {
+            let s = kb.add_source(&path, None)?;
+            let st = kb.status();
+            let n = st.sources.iter().find(|x| x.source.id == s.id).map(|x| (x.files, x.passages)).unwrap_or_default();
+            println!("connected {} ({:?}): {} files, {} passages · {note}", s.name, s.kind, n.0, n.1);
+        }
+        KnowledgeCmd::Remove { id } => {
+            kb.remove_source(&id)?;
+            println!("removed {id} · {note}");
+        }
+        KnowledgeCmd::Search { query } => {
+            let q = query.join(" ");
+            for h in kb.search(&q, kb.settings().top_k) {
+                println!("{:>6.2}  [[{}]]{}  ({} · {})", h.score, h.title, if h.heading.is_empty() { String::new() } else { format!(" › {}", h.heading) }, h.source, h.path);
+                let preview: String = h.text.chars().take(160).collect();
+                println!("        {}", preview.replace('\n', " "));
+            }
+        }
+        KnowledgeCmd::Enable | KnowledgeCmd::Disable => {
+            let mut s = kb.settings().clone();
+            s.enabled = matches!(cmd, KnowledgeCmd::Enable);
+            kb.set_settings(s)?;
+            println!("consult before answering: {} · a running server picks it up within 20 s", if matches!(cmd, KnowledgeCmd::Enable) { "on" } else { "off" });
+        }
+    }
+    Ok(())
+}
+
 fn dispatch(cmd: Cmd) -> Result<()> {
     let m = setup::model_or_default;
     match cmd {
@@ -218,6 +281,7 @@ fn dispatch(cmd: Cmd) -> Result<()> {
         }
         Cmd::Status => setup::status(),
         Cmd::Stop => web::stop(),
+        Cmd::Knowledge { cmd } => cmd_knowledge(cmd),
         Cmd::Models => cmd_models(),
         Cmd::Inspect { model, json, tensors } => cmd_inspect(&m(model)?, json, tensors),
         Cmd::Hardware { bench, path, json } => cmd_hardware(bench, path, json),
@@ -632,7 +696,14 @@ fn cmd_serve(arg: &str, o: &Overrides, host: &str, port: u16, max_tokens: usize,
     let control = web::control(arg.to_string(), o.clone());
     web::ServerFile::write(&base, &model_name);
     let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build()?;
-    let res = rt.block_on(kestrel_server::serve(shared, &format!("{host}:{port}"), kestrel_server::ServeOptions { default_max_tokens: max_tokens, extra_info, control: Some(control) }));
+    let knowledge = match knowledge_base() {
+        Ok(kb) => Some(Arc::new(std::sync::Mutex::new(kb))),
+        Err(e) => {
+            eprintln!("  (knowledge base unavailable: {e})");
+            None
+        }
+    };
+    let res = rt.block_on(kestrel_server::serve(shared, &format!("{host}:{port}"), kestrel_server::ServeOptions { default_max_tokens: max_tokens, extra_info, control: Some(control), knowledge }));
     web::ServerFile::remove_own();
     eprintln!("Kestrel stopped; the model's memory is free.");
     res

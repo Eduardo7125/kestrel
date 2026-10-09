@@ -220,6 +220,25 @@ code { font: 12.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; ba
 .log { max-height: 260px; overflow: auto; white-space: pre-wrap; }
 .section-title { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 18px 0 8px; }
 .pill.clickable { cursor: pointer; }
+.drop { border: 2px dashed var(--axis); border-radius: 12px; padding: 22px; text-align: center; color: var(--ink-2); cursor: pointer; }
+.drop.over { border-color: var(--accent); background: var(--accent-soft); }
+.row-inline { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.row-inline input[type=text], .row-inline input[type=search] { flex: 1; min-width: 220px; background: var(--surface-2); border: 1px solid var(--ring); border-radius: 8px; padding: 8px 10px; }
+.hit { border: 1px solid var(--ring); border-radius: 10px; padding: 10px 12px; margin-top: 8px; background: var(--surface); }
+.hit .t { font-weight: 600; font-size: 13px; }
+.hit .s { color: var(--muted); font-size: 12px; }
+.hit p { margin: 6px 0 0; font-size: 13px; color: var(--ink-2); white-space: pre-wrap; }
+.sources { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+.src-chip { display: inline-flex; align-items: center; gap: 5px; font-size: 12px; padding: 3px 9px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--ring); color: var(--ink-2); text-decoration: none; }
+a.src-chip:hover { color: var(--accent); }
+.kb-toggle { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-2); cursor: pointer; user-select: none; }
+.kb-toggle input { accent-color: var(--accent); }
+.compare th, .compare td { vertical-align: top; }
+.step { display: flex; gap: 12px; margin-top: 12px; }
+.step b.n { flex: none; width: 24px; height: 24px; border-radius: 50%; background: var(--accent); color: var(--accent-ink); display: inline-flex; align-items: center; justify-content: center; font-size: 12px; }
+.ex { border: 1px solid var(--ring); border-radius: 10px; padding: 10px; margin-top: 8px; display: grid; gap: 6px; }
+.ex textarea { width: 100%; background: var(--surface-2); border: 1px solid var(--ring); border-radius: 8px; padding: 6px 8px; min-height: 48px; resize: vertical; }
+.ex .bar { display: flex; justify-content: space-between; align-items: center; color: var(--muted); font-size: 12px; }
 @media (max-width: 860px) {
   .app { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
   .rail { order: 2; flex-direction: row; border-right: 0; border-top: 1px solid var(--ring); padding: 6px; overflow-x: auto; }
@@ -245,6 +264,8 @@ code { font: 12.5px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; ba
     <button class="nav" data-view="performance"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 3v18h18"/><path d="M7 15l4-4 3 3 5-6"/></svg><span data-i18n="nav.performance"></span></button>
     <button class="nav" data-view="plan"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg><span data-i18n="nav.plan"></span></button>
     <button class="nav" data-view="connect"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg><span data-i18n="nav.connect"></span></button>
+    <button class="nav" data-view="knowledge"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/><path d="M9 7h7M9 11h5"/></svg><span data-i18n="nav.knowledge"></span></button>
+    <button class="nav" data-view="training"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 10L12 5 2 10l10 5 10-5z"/><path d="M6 12v5c3 2 9 2 12 0v-5"/></svg><span data-i18n="nav.training"></span></button>
     <button class="nav" data-view="settings"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg><span data-i18n="nav.settings"></span></button>
     <div class="spacer"></div>
     <div class="rail-foot">
@@ -299,7 +320,25 @@ const I18N = {
     "con.title": "Connect", "con.lede": "Kestrel speaks the OpenAI API, so most apps and SDKs work by changing the base URL. The server has no authentication: keep it on localhost or behind a proxy.",
     "con.base": "Base URL", "con.model": "Model id", "con.endpoints": "Endpoints",
     "mem.reserved": "{b} reserved", "mem.est": "plan estimate", "mem.lastreq": "last request", "plan.measured": "measured: {v} tok/s",
-    "nav.settings": "Settings",
+    "nav.settings": "Settings", "nav.knowledge": "Knowledge", "nav.training": "Training",
+    "kb.title": "Knowledge", "kb.lede": "Connect your Obsidian vault or any folder, or upload files. Before every answer Kestrel looks up the most relevant passages and gives them to the model with your question, so it can answer from your notes and cite them. Everything stays on this machine.",
+    "kb.use": "Consult my knowledge before every answer", "kb.use.h": "Searches your notes with each message and adds the best passages to the model's context", "kb.k": "Passages per answer", "kb.k.h": "More passages: more context, slower answers", "kb.chars": "Context size (characters)", "kb.chars.h": "About 4 characters per token; keep it well below the model's context",
+    "kb.save": "Save", "kb.saved": "Saved", "kb.connect": "Connect a vault or folder", "kb.connect.h": "Paste the folder path. An Obsidian vault is recognised by its .obsidian folder; links open the note in Obsidian. Windows example: C:\\Users\\you\\Documents\\MyVault",
+    "kb.path": "Folder path", "kb.connect.b": "Connect", "kb.upload": "Upload files", "kb.upload.h": "Drop text files here or click to choose: Markdown, text, CSV, JSON, code (up to 5 MB each). PDF and Word files are not read yet: export them to text or Markdown first.",
+    "kb.sources": "Connected sources", "kb.sources.sub": "Changes in these folders are picked up automatically within 20 seconds.", "kb.files": "files", "kb.passages": "passages", "kb.sync": "Re-read", "kb.remove": "Disconnect", "kb.remove.q": "Disconnect this source? Its files are not touched.",
+    "kb.uploads": "Uploaded files", "kb.del": "Delete", "kb.test": "Try a search", "kb.test.h": "See which passages the model would receive for a question.", "kb.search": "Search", "kb.open": "Open in Obsidian", "kb.none": "Nothing relevant found.", "kb.empty": "Nothing connected yet.",
+    "kb.off": "This server was started without a knowledge base.", "kb.chip": "Use my notes", "chat.sources": "Sources",
+    "tr.title": "Training", "tr.lede": "Three ways to teach the AI something, from instant to heavy. For your notes and facts, use Knowledge; real fine-tuning changes how the model writes, not what it knows.",
+    "tr.col.what": "What it changes", "tr.col.when": "Use it for", "tr.col.cost": "Cost", "tr.col.here": "In Kestrel",
+    "tr.rag": "Knowledge (retrieval)", "tr.rag.what": "What the model reads before answering", "tr.rag.when": "Your notes, documents, facts that change", "tr.rag.cost": "Instant, updates when you edit a note", "tr.rag.here": "Built in: Knowledge page",
+    "tr.ins": "Custom instructions", "tr.ins.what": "Role, tone, rules for every answer", "tr.ins.when": "\"Answer in Spanish\", \"be brief\", \"you are my study assistant\"", "tr.ins.cost": "Instant", "tr.ins.here": "Built in: below",
+    "tr.ft": "Fine-tuning (LoRA)", "tr.ft.what": "The model's weights", "tr.ft.when": "A consistent style or format, a narrow task done many times", "tr.ft.cost": "A GPU and hours; good examples", "tr.ft.here": "Build the dataset here, train outside, run the result here",
+    "tr.ins.title": "Custom instructions", "tr.ins.sub": "Sent as the system prompt with every chat message (the same field as the chat's settings).", "tr.ins.ph": "For example: Answer in Spanish. Be concise. When you use my notes, say which note.",
+    "tr.ds.title": "Fine-tuning dataset", "tr.ds.sub": "Collect examples of the answers you want: press \"Save as example\" under a good answer in the chat, or add one here, then edit them. 50–500 good examples go a long way.",
+    "tr.ds.add": "Add example", "tr.ds.export": "Export JSONL", "tr.ds.count": "{n} examples", "tr.ds.one": "1 example", "tr.ds.user": "Question", "tr.ds.asst": "Ideal answer", "tr.ds.empty": "No examples yet.", "tr.ds.clear": "Delete all", "tr.ds.clear.q": "Delete every example?",
+    "tr.how.title": "How to fine-tune with this dataset", "tr.how.sub": "Kestrel runs models; it does not train them. This is the path that ends with your fine-tuned model running in Kestrel.",
+    "tr.how.1": "Export the dataset (JSONL, one conversation per line in the OpenAI chat format).", "tr.how.2": "Train a LoRA adapter with a tool such as Unsloth (free, runs on one GPU). An 8 GB GPU fits models up to about 7–8B parameters with 4-bit QLoRA; a 30B model needs far more memory.", "tr.how.3": "Merge the adapter into the model and export it as GGUF with a Q4_K_M quantization (Unsloth does both in one call).", "tr.how.4": "Run it: kestrel setup --model-file your-model.gguf.",
+    "tr.how.more": "Full guide: docs/training.md", "chat.keep": "Save as example", "chat.kept": "Saved",
     "ph.loaded": "Ready", "ph.loading": "Loading the model…", "ph.unloading": "Unloading…", "ph.unloaded": "Model unloaded", "ph.tuning": "Autotuning…", "ph.error": "Load failed", "ph.stopping": "Stopping…",
     "set.title": "Settings", "set.lede": "Change how Kestrel runs this model. Preview the plan first; applying reloads the model with the new settings.",
     "set.model": "Model", "set.model.sub": "Free the memory without closing Kestrel, load the model again, or shut Kestrel down.",
@@ -349,7 +388,25 @@ const I18N = {
     "con.title": "Conectar", "con.lede": "Kestrel habla la API de OpenAI: casi cualquier app o SDK funciona cambiando la URL base. El servidor no tiene autenticación: mantenlo en localhost o detrás de un proxy.",
     "con.base": "URL base", "con.model": "Id del modelo", "con.endpoints": "Endpoints",
     "mem.reserved": "{b} reservados", "mem.est": "estimación del plan", "mem.lastreq": "última petición", "plan.measured": "medido: {v} tok/s",
-    "nav.settings": "Ajustes",
+    "nav.settings": "Ajustes", "nav.knowledge": "Conocimiento", "nav.training": "Entrenamiento",
+    "kb.title": "Conocimiento", "kb.lede": "Conecta tu vault de Obsidian o cualquier carpeta, o sube archivos. Antes de cada respuesta Kestrel busca los fragmentos más relevantes y se los da al modelo junto a tu pregunta, para que responda con tus notas y las cite. Todo se queda en esta máquina.",
+    "kb.use": "Consultar mi conocimiento antes de cada respuesta", "kb.use.h": "Busca en tus notas con cada mensaje y añade los mejores fragmentos al contexto del modelo", "kb.k": "Fragmentos por respuesta", "kb.k.h": "Más fragmentos: más contexto, respuestas más lentas", "kb.chars": "Tamaño del contexto (caracteres)", "kb.chars.h": "Unos 4 caracteres por token; muy por debajo del contexto del modelo",
+    "kb.save": "Guardar", "kb.saved": "Guardado", "kb.connect": "Conectar un vault o carpeta", "kb.connect.h": "Pega la ruta de la carpeta. Un vault de Obsidian se reconoce por su carpeta .obsidian; los enlaces abren la nota en Obsidian. Ejemplo en Windows: C:\\Users\\tú\\Documents\\MiVault",
+    "kb.path": "Ruta de la carpeta", "kb.connect.b": "Conectar", "kb.upload": "Subir archivos", "kb.upload.h": "Arrastra aquí archivos de texto o haz clic para elegir: Markdown, texto, CSV, JSON, código (hasta 5 MB cada uno). Los PDF y Word aún no se leen: expórtalos antes a texto o Markdown.",
+    "kb.sources": "Fuentes conectadas", "kb.sources.sub": "Los cambios en estas carpetas se detectan solos en menos de 20 segundos.", "kb.files": "archivos", "kb.passages": "fragmentos", "kb.sync": "Releer", "kb.remove": "Desconectar", "kb.remove.q": "¿Desconectar esta fuente? Sus archivos no se tocan.",
+    "kb.uploads": "Archivos subidos", "kb.del": "Borrar", "kb.test": "Prueba una búsqueda", "kb.test.h": "Mira qué fragmentos recibiría el modelo para una pregunta.", "kb.search": "Buscar", "kb.open": "Abrir en Obsidian", "kb.none": "No se encontró nada relevante.", "kb.empty": "Aún no hay nada conectado.",
+    "kb.off": "Este servidor se arrancó sin base de conocimiento.", "kb.chip": "Usar mis notas", "chat.sources": "Fuentes",
+    "tr.title": "Entrenamiento", "tr.lede": "Tres formas de enseñarle algo a la IA, de inmediata a pesada. Para tus notas y datos, usa Conocimiento; el ajuste fino real cambia cómo escribe el modelo, no lo que sabe.",
+    "tr.col.what": "Qué cambia", "tr.col.when": "Úsalo para", "tr.col.cost": "Coste", "tr.col.here": "En Kestrel",
+    "tr.rag": "Conocimiento (recuperación)", "tr.rag.what": "Lo que el modelo lee antes de responder", "tr.rag.when": "Tus notas, documentos, datos que cambian", "tr.rag.cost": "Inmediato; se actualiza al editar una nota", "tr.rag.here": "Integrado: página Conocimiento",
+    "tr.ins": "Instrucciones personalizadas", "tr.ins.what": "Rol, tono y reglas de cada respuesta", "tr.ins.when": "«Responde en español», «sé breve», «eres mi asistente de estudio»", "tr.ins.cost": "Inmediato", "tr.ins.here": "Integrado: aquí debajo",
+    "tr.ft": "Ajuste fino (LoRA)", "tr.ft.what": "Los pesos del modelo", "tr.ft.when": "Un estilo o formato constante, una tarea concreta repetida muchas veces", "tr.ft.cost": "Una GPU y horas; buenos ejemplos", "tr.ft.here": "Construye aquí el dataset, entrena fuera y ejecuta el resultado aquí",
+    "tr.ins.title": "Instrucciones personalizadas", "tr.ins.sub": "Se envían como prompt de sistema con cada mensaje del chat (es el mismo campo que en los ajustes del chat).", "tr.ins.ph": "Por ejemplo: Responde en español. Sé conciso. Cuando uses mis notas, di de qué nota sale.",
+    "tr.ds.title": "Dataset para ajuste fino", "tr.ds.sub": "Reúne ejemplos de las respuestas que quieres: pulsa «Guardar como ejemplo» bajo una buena respuesta del chat, o añádelos aquí, y edítalos. Con 50–500 buenos ejemplos se llega lejos.",
+    "tr.ds.add": "Añadir ejemplo", "tr.ds.export": "Exportar JSONL", "tr.ds.count": "{n} ejemplos", "tr.ds.one": "1 ejemplo", "tr.ds.user": "Pregunta", "tr.ds.asst": "Respuesta ideal", "tr.ds.empty": "Aún no hay ejemplos.", "tr.ds.clear": "Borrar todos", "tr.ds.clear.q": "¿Borrar todos los ejemplos?",
+    "tr.how.title": "Cómo hacer el ajuste fino con este dataset", "tr.how.sub": "Kestrel ejecuta modelos; no los entrena. Este es el camino que termina con tu modelo ajustado funcionando en Kestrel.",
+    "tr.how.1": "Exporta el dataset (JSONL, una conversación por línea en formato de chat de OpenAI).", "tr.how.2": "Entrena un adaptador LoRA con una herramienta como Unsloth (gratuita, funciona con una GPU). Una GPU de 8 GB admite modelos de hasta unos 7–8B parámetros con QLoRA de 4 bits; uno de 30B necesita mucha más memoria.", "tr.how.3": "Fusiona el adaptador con el modelo y expórtalo como GGUF con cuantización Q4_K_M (Unsloth hace las dos cosas en un paso).", "tr.how.4": "Ejecútalo: kestrel setup --model-file tu-modelo.gguf.",
+    "tr.how.more": "Guía completa: docs/training.md", "chat.keep": "Guardar como ejemplo", "chat.kept": "Guardado",
     "ph.loaded": "Listo", "ph.loading": "Cargando el modelo…", "ph.unloading": "Descargando…", "ph.unloaded": "Modelo descargado", "ph.tuning": "Autotune en curso…", "ph.error": "Error al cargar", "ph.stopping": "Apagando…",
     "set.title": "Ajustes", "set.lede": "Cambia cómo ejecuta Kestrel este modelo. Previsualiza el plan primero; al aplicar, el modelo se recarga con los nuevos ajustes.",
     "set.model": "Modelo", "set.model.sub": "Libera la memoria sin cerrar Kestrel, vuelve a cargar el modelo o apaga Kestrel.",
@@ -497,7 +554,7 @@ function render() {
   if (S.view === "chat") return renderChat(view);
   const page = h("div", { class: "page" });
   view.replaceChildren(page);
-  const builders = { memory: buildMemory, experts: buildExperts, performance: buildPerformance, plan: buildPlan, connect: buildConnect, settings: buildSettings };
+  const builders = { memory: buildMemory, experts: buildExperts, performance: buildPerformance, plan: buildPlan, connect: buildConnect, settings: buildSettings, knowledge: buildKnowledge, training: buildTraining };
   (builders[S.view] || buildMemory)(page);
   renderLivePage();
 }
@@ -896,6 +953,128 @@ function buildSettings(page) {
 }
 function num0(x, d = 0) { return num(x, d); }
 
+// ---------------------------------------------------------------- knowledge page
+function buildKnowledge(page) {
+  page.append(h("h1", { text: t("kb.title") }), h("p", { class: "lede", text: t("kb.lede") }));
+  const banner = h("div", { class: "banner", hidden: true }); page.append(banner);
+  const say = (text, err) => { banner.hidden = !text; banner.className = "banner" + (err ? " err" : ""); banner.replaceChildren(...[icon(err ? "warn" : "regen"), h("span", { class: "grow", text: text || "" })]); };
+  // settings
+  const use = h("input", { type: "checkbox", role: "switch" }), k = h("input", { type: "number", min: 1, max: 20 }), chars = h("input", { type: "number", min: 500, max: 20000, step: 250 });
+  const saveB = h("button", { class: "btn primary" }, t("kb.save"));
+  page.append(h("div", { class: "card" }, h("label", { class: "switch" }, use, h("span", {}, t("kb.use"), h("small", { text: t("kb.use.h") }))),
+    h("div", { class: "form", style: "margin-top:14px" }, h("label", { class: "field" }, t("kb.k"), k, h("small", { text: t("kb.k.h") })), h("label", { class: "field" }, t("kb.chars"), chars, h("small", { text: t("kb.chars.h") }))),
+    h("div", { class: "btns" }, saveB)));
+  // connect + upload
+  const path = h("input", { type: "text", placeholder: t("kb.path"), spellcheck: "false" }), connectB = h("button", { class: "btn primary" }, t("kb.connect.b"));
+  const fileIn = h("input", { type: "file", multiple: true, hidden: true });
+  const drop = h("div", { class: "drop", tabindex: 0 }, t("kb.upload.h"));
+  page.append(h("div", { class: "grid cols-2", style: "margin-top:16px" },
+    h("div", { class: "card" }, h("h2", { text: t("kb.connect") }), h("p", { class: "sub", text: t("kb.connect.h") }), h("div", { class: "row-inline" }, path, connectB)),
+    h("div", { class: "card" }, h("h2", { text: t("kb.upload") }), drop, fileIn)));
+  // sources
+  const list = h("div", {});
+  page.append(h("div", { class: "card", style: "margin-top:16px" }, h("h2", { text: t("kb.sources") }), h("p", { class: "sub", text: t("kb.sources.sub") }), list));
+  // test search
+  const q = h("input", { type: "search", placeholder: t("kb.search") + "…" }), qB = h("button", { class: "btn" }, t("kb.search")), results = h("div", {});
+  page.append(h("div", { class: "card", style: "margin-top:16px" }, h("h2", { text: t("kb.test") }), h("p", { class: "sub", text: t("kb.test.h") }), h("div", { class: "row-inline" }, q, qB), results));
+
+  function render(st) {
+    use.checked = st.settings.enabled; k.value = st.settings.top_k; chars.value = st.settings.max_context_chars;
+    const rows = st.sources.map(x => h("tr", {},
+      h("td", { text: x.kind === "obsidian" ? "Obsidian" : x.kind === "uploads" ? "⬆" : "📁" }),
+      h("td", {}, h("b", { text: x.kind === "uploads" ? t("kb.uploads") : x.name }), h("div", { class: "s", style: "color:var(--muted);font-size:12px;word-break:break-all", text: x.error || x.path })),
+      h("td", { class: "num", text: x.files + " " + t("kb.files") }), h("td", { class: "num", text: x.passages + " " + t("kb.passages") }),
+      h("td", { class: "num" }, x.kind === "uploads" ? null : h("button", { class: "btn", onclick: async () => { if (confirm(t("kb.remove.q"))) await act("/api/knowledge/sources/remove", { id: x.id }); } }, t("kb.remove")))));
+    const ups = (st.uploads || []).map(n => h("span", { class: "src-chip" }, n, h("button", { class: "icon-btn", style: "padding:0 2px;border:0;background:none", title: t("kb.del"), onclick: () => act("/api/knowledge/uploads/delete", { name: n }) }, icon("trash"))));
+    list.replaceChildren(
+      st.sources.length > 1 || (st.uploads || []).length ? h("div", { class: "table-wrap" }, h("table", {}, h("tbody", {}, rows))) : h("p", { class: "sub", text: t("kb.empty") }),
+      ups.length ? h("div", { class: "sources", style: "margin-top:10px" }, ups) : null,
+      h("div", { class: "btns" }, h("button", { class: "btn", onclick: () => act("/api/knowledge/sync", {}) }, t("kb.sync"))));
+  }
+  async function act(url, body, okMsg) {
+    try { const st = await postJSON(url, body); render(st.status || st); say(okMsg || ""); return true; } catch (e) { say(e.message, true); return false; }
+  }
+  async function load() {
+    let st;
+    try { st = await getJSON("/api/knowledge"); } catch { say(t("kb.off"), true); for (const b of [saveB, connectB, qB]) b.disabled = true; return; }
+    render(st);
+  }
+  saveB.onclick = () => act("/api/knowledge/settings", { enabled: use.checked, top_k: Number(k.value), max_context_chars: Number(chars.value) }, t("kb.saved"));
+  use.onchange = saveB.onclick;
+  connectB.onclick = async () => { if (path.value.trim() && await act("/api/knowledge/sources", { path: path.value.trim() })) path.value = ""; };
+  path.addEventListener("keydown", e => { if (e.key === "Enter") connectB.onclick(); });
+  async function upload(files) {
+    for (const f of files) {
+      if (f.size > 5 * 1024 * 1024) { say(f.name + ": > 5 MB", true); continue; }
+      const content = await f.text();
+      await act("/api/knowledge/upload", { name: f.name, content }, "✓ " + f.name);
+    }
+  }
+  drop.onclick = () => fileIn.click(); fileIn.onchange = () => upload([...fileIn.files]);
+  drop.addEventListener("dragover", e => { e.preventDefault(); drop.classList.add("over"); });
+  drop.addEventListener("dragleave", () => drop.classList.remove("over"));
+  drop.addEventListener("drop", e => { e.preventDefault(); drop.classList.remove("over"); upload([...e.dataTransfer.files]); });
+  async function search() {
+    if (!q.value.trim()) return;
+    try {
+      const hits = await postJSON("/api/knowledge/search", { query: q.value, k: 6 });
+      results.replaceChildren(...(hits.length ? hits.map(x => h("div", { class: "hit" },
+        h("div", { class: "t", text: x.title + (x.heading ? " › " + x.heading : "") }),
+        h("div", { class: "s", text: x.source + " · " + x.path + " · score " + num(x.score, 2) }),
+        h("p", { text: x.text.length > 600 ? x.text.slice(0, 600) + "…" : x.text }),
+        x.uri ? h("a", { class: "src-chip", style: "margin-top:6px", href: x.uri, text: t("kb.open") }) : null)) : [h("p", { class: "sub", text: t("kb.none") })]));
+    } catch (e) { say(e.message, true); }
+  }
+  qB.onclick = search; q.addEventListener("keydown", e => { if (e.key === "Enter") search(); });
+  load();
+}
+
+// ---------------------------------------------------------------- training page
+function buildTraining(page) {
+  page.append(h("h1", { text: t("tr.title") }), h("p", { class: "lede", text: t("tr.lede") }));
+  const rows = [["tr.rag", "knowledge"], ["tr.ins", null], ["tr.ft", null]];
+  page.append(h("div", { class: "card" }, h("div", { class: "table-wrap", style: "max-height:none" }, h("table", { class: "compare" },
+    h("thead", {}, h("tr", {}, h("th", {}), ["tr.col.what", "tr.col.when", "tr.col.cost", "tr.col.here"].map(c => h("th", { text: t(c) })))),
+    h("tbody", {}, rows.map(([k, link]) => h("tr", {}, h("td", {}, h("b", { text: t(k) })), h("td", { text: t(k + ".what") }), h("td", { text: t(k + ".when") }), h("td", { text: t(k + ".cost") }),
+      h("td", {}, link ? h("a", { href: "#" + link, onclick: e => { e.preventDefault(); go(link); }, text: t(k + ".here") }) : t(k + ".here")))))))));
+  // custom instructions = the chat's system prompt
+  const ins = h("textarea", { style: "width:100%;min-height:110px;background:var(--surface-2);border:1px solid var(--ring);border-radius:8px;padding:8px 10px", placeholder: t("tr.ins.ph") });
+  ins.value = chat.opts.system || "";
+  ins.addEventListener("input", () => { chat.opts.system = ins.value; store.set("chatopts", chat.opts); });
+  page.append(h("div", { class: "card", style: "margin-top:16px" }, h("h2", { text: t("tr.ins.title") }), h("p", { class: "sub", text: t("tr.ins.sub") }), ins));
+  // dataset builder
+  const count = h("span", { class: "pill" }), listBox = h("div", {});
+  const addB = h("button", { class: "btn" }, t("tr.ds.add")), expB = h("button", { class: "btn primary" }, t("tr.ds.export")), clrB = h("button", { class: "btn danger" }, t("tr.ds.clear"));
+  page.append(h("div", { class: "card", style: "margin-top:16px" }, h("div", { class: "row-inline" }, h("h2", { style: "margin:0", text: t("tr.ds.title") }), count), h("p", { class: "sub", text: t("tr.ds.sub") }),
+    h("div", { class: "btns", style: "margin-top:0" }, addB, expB, clrB), listBox));
+  function draw() {
+    const ds = store.get("dataset", []);
+    count.textContent = ds.length === 1 ? t("tr.ds.one") : t("tr.ds.count", { n: ds.length });
+    expB.disabled = !ds.length; clrB.disabled = !ds.length;
+    listBox.replaceChildren(...(ds.length ? ds.map((ex, i) => {
+      const u = h("textarea", { "aria-label": t("tr.ds.user") }), a = h("textarea", { "aria-label": t("tr.ds.asst"), style: "min-height:90px" });
+      u.value = ex.user; a.value = ex.assistant;
+      const save = () => { const d = store.get("dataset", []); if (d[i]) { d[i].user = u.value; d[i].assistant = a.value; store.set("dataset", d); } };
+      u.oninput = save; a.oninput = save;
+      return h("div", { class: "ex" }, h("div", { class: "bar" }, h("span", { text: "#" + (i + 1) + " · " + t("tr.ds.user") }), h("button", { class: "icon-btn", title: t("kb.del"), onclick: () => { const d = store.get("dataset", []); d.splice(i, 1); store.set("dataset", d); draw(); } }, icon("trash"))), u,
+        h("div", { class: "bar" }, h("span", { text: t("tr.ds.asst") })), a);
+    }).reverse() : [h("p", { class: "sub", style: "margin-top:12px", text: t("tr.ds.empty") })]));
+  }
+  addB.onclick = () => { const d = store.get("dataset", []); d.push({ user: "", assistant: "", at: Date.now() }); store.set("dataset", d); draw(); };
+  clrB.onclick = () => { if (confirm(t("tr.ds.clear.q"))) { store.set("dataset", []); draw(); } };
+  expB.onclick = () => {
+    const sys = (chat.opts.system || "").trim();
+    const lines = store.get("dataset", []).filter(x => x.user.trim() && x.assistant.trim()).map(x => JSON.stringify({ messages: [...(sys ? [{ role: "system", content: sys }] : []), { role: "user", content: x.user }, { role: "assistant", content: x.assistant }] }));
+    const a = h("a", { href: URL.createObjectURL(new Blob([lines.join("\n") + "\n"], { type: "application/jsonl" })), download: "kestrel-dataset.jsonl" });
+    document.body.append(a); a.click(); a.remove();
+  };
+  draw();
+  // how-to
+  page.append(h("div", { class: "card", style: "margin-top:16px" }, h("h2", { text: t("tr.how.title") }), h("p", { class: "sub", text: t("tr.how.sub") }),
+    [1, 2, 3, 4].map(n => h("div", { class: "step" }, h("b", { class: "n", text: n }), h("span", { text: t("tr.how." + n) }))),
+    h("p", { class: "sub", style: "margin-top:14px" }, h("a", { href: "https://github.com/eduardo7125/kestrel/blob/main/docs/training.md", target: "_blank", rel: "noopener", text: t("tr.how.more") }))));
+}
+
 // ---------------------------------------------------------------- markdown (safe)
 function esc(x) { return x.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;"); }
 function inline(x) {
@@ -967,7 +1146,9 @@ function renderChat(view) {
     h("label", {}, t("chat.max"), h("input", { type: "number", min: 1, max: 32768, step: 1, value: chat.opts.max_tokens, oninput: e => { chat.opts.max_tokens = Number(e.target.value); store.set("chatopts", chat.opts); } })));
   $("textarea", pop).value = chat.opts.system;
   const gear = h("button", { class: "icon-btn", title: t("chat.settings"), onclick: () => { pop.classList.toggle("open"); store.set("popOpen", pop.classList.contains("open")); } }, icon("gear"));
-  const composer = h("div", { class: "composer" }, h("div", { class: "composer-inner" }, ta, h("div", { class: "row" }, gear, h("span", { class: "hint", text: t("chat.hint") }), h("span", { class: "grow" }), sendBtn), pop));
+  if (chat.opts.knowledge === undefined) chat.opts.knowledge = true;
+  const kbToggle = h("label", { class: "kb-toggle", title: t("kb.use.h") }, h("input", { type: "checkbox", checked: chat.opts.knowledge ? true : null, onchange: e => { chat.opts.knowledge = e.target.checked; store.set("chatopts", chat.opts); } }), t("kb.chip"));
+  const composer = h("div", { class: "composer" }, h("div", { class: "composer-inner" }, ta, h("div", { class: "row" }, gear, kbToggle, h("span", { class: "hint", text: t("chat.hint") }), h("span", { class: "grow" }), sendBtn), pop));
   view.replaceChildren(h("div", { class: "chat" }, convs, h("section", { class: "convo" }, scroller, composer)));
   chatEls = { msgs, scroller, ta, sendBtn };
   ta.addEventListener("input", () => { ta.style.height = "auto"; ta.style.height = Math.min(220, ta.scrollHeight) + "px"; });
@@ -996,9 +1177,22 @@ function messageEl(m, isLast) {
     if (m.error) meta.append(h("span", { class: "err-msg" }, icon("warn"), t("chat.error", { e: m.error })));
     if (m.stats) meta.append(h("span", { text: t("chat.stats", m.stats) + (m.stopped ? " · " + t("chat.stopped") : "") }));
     meta.append(copyAction(() => m.content.replace(/^\s*<think>[\s\S]*?<\/think>\s*/, "")));
+    if (m.content && !m.error) { const kb = h("button", {}, icon("dl"), h("span", { text: t("chat.keep") })); kb.addEventListener("click", () => { keepExample(m); kb.lastChild.textContent = t("chat.kept"); }); meta.append(kb); }
     if (isLast) meta.append(h("button", { onclick: regenerate }, icon("regen"), t("chat.regen")));
   }
-  return h("div", { class: "msg " + m.role }, bubble, meta);
+  const srcs = m.role === "assistant" && m.sources && m.sources.length ? h("div", { class: "sources" }, h("span", { class: "s", style: "font-size:12px;color:var(--muted)", text: t("chat.sources") + ":" }), m.sources.map(sourceChip)) : null;
+  return h("div", { class: "msg " + m.role }, bubble, srcs, meta);
+}
+function sourceChip(x) {
+  const label = "📄 " + x.title + (x.heading ? " › " + x.heading.split(" › ").pop() : "");
+  return x.uri ? h("a", { class: "src-chip", href: x.uri, title: x.path + " · " + x.source, text: label }) : h("span", { class: "src-chip", title: x.path + " · " + x.source, text: label });
+}
+function keepExample(m) {
+  const c = current(); const i = c.messages.indexOf(m);
+  const user = c.messages.slice(0, i).reverse().find(x => x.role === "user");
+  const ds = store.get("dataset", []);
+  ds.push({ user: user ? user.content : "", assistant: m.content.replace(/^\s*<think>[\s\S]*?<\/think>\s*/, ""), at: Date.now() });
+  store.set("dataset", ds);
 }
 function copyAction(get) { const b = h("button", {}, icon("copy"), h("span", { text: t("chat.copy") })); b.addEventListener("click", async () => { try { await navigator.clipboard.writeText(get()); b.lastChild.textContent = t("chat.copied"); setTimeout(() => b.lastChild.textContent = t("chat.copy"), 1200); } catch {} }); return b; }
 function exportConv(c) {
@@ -1020,7 +1214,7 @@ async function stream(c) {
   const el = chatEls.msgs.lastElementChild, bubble = $(".bubble", el);
   $(".meta", el).hidden = true;
   renderAssistant(bubble, "", true);
-  const body = { model: "local", stream: true, temperature: chat.opts.temperature, max_tokens: chat.opts.max_tokens,
+  const body = { model: "local", stream: true, temperature: chat.opts.temperature, max_tokens: chat.opts.max_tokens, kestrel: { knowledge: chat.opts.knowledge !== false },
     messages: [...(chat.opts.system ? [{ role: "system", content: chat.opts.system }] : []), ...c.messages.slice(0, -1).map(m => ({ role: m.role, content: m.content }))] };
   chat.ctrl = new AbortController(); S.busyLocal = true; updateSendBtn();
   const t0 = performance.now(); let first = null, n = 0, timings = null, usage = null, raf = 0;
@@ -1043,6 +1237,7 @@ async function stream(c) {
           const delta = j.choices && j.choices[0] && j.choices[0].delta && j.choices[0].delta.content;
           if (delta) { if (first === null) first = performance.now(); n++; msg.content += delta; if (!raf) raf = requestAnimationFrame(paint); }
           if (j.timings) timings = j.timings; if (j.usage) usage = j.usage;
+          if (j.kestrel_sources) msg.sources = j.kestrel_sources;
         }
       }
     }

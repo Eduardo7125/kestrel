@@ -667,6 +667,7 @@ dependencies = [
  "kestrel-engine",
  "kestrel-gguf",
  "kestrel-hw",
+ "kestrel-knowledge",
  "kestrel-memory",
  "kestrel-model",
  "kestrel-planner",
@@ -720,6 +721,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "kestrel-knowledge"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "kestrel-memory"
 version = "0.1.0"
 dependencies = [
@@ -763,8 +774,10 @@ dependencies = [
  "kestrel-backends",
  "kestrel-engine",
  "kestrel-hw",
+ "kestrel-knowledge",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tokio-stream",
  "tower",

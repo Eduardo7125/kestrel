@@ -42,6 +42,7 @@ kestrel-planner = { path = "crates/kestrel-planner" }
 kestrel-engine = { path = "crates/kestrel-engine" }
 kestrel-backends = { path = "crates/kestrel-backends" }
 kestrel-server = { path = "crates/kestrel-server" }
+kestrel-knowledge = { path = "crates/kestrel-knowledge" }
 
 [profile.release]
 opt-level = 3
