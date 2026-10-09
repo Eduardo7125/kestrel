@@ -76,10 +76,21 @@ Then the setup:
 4. **downloads it** from Hugging Face with progress, resume and SHA-256
    verification. Stop it whenever you like; run the script again and it
    continues where it stopped;
-5. **plans it, saves it as your default model and opens the chat.**
+5. **plans it, saves it as your default model, starts it and opens the
+   [web dashboard](#web-dashboard)** in your browser, and prints the
+   addresses other apps can use:
 
-**Next time**, run `./start-here.sh` again, or just `kestrel`: it starts
-straight away, with no build and no download.
+```text
+Kestrel is serving Qwen2.5-7B-Instruct
+  Dashboard:        http://127.0.0.1:8080/
+  OpenAI base URL:  http://127.0.0.1:8080/v1
+  Metrics:          http://127.0.0.1:8080/metrics
+  stop: press Ctrl+C
+```
+
+**Next time**, run `./start-here.sh` again, or `kestrel web`: it starts
+straight away, with no build and no download. `kestrel` alone chats in the
+terminal.
 
 | Option (after `./start-here.sh` or `START-HERE.bat`) | What it does |
 |---|---|
@@ -89,7 +100,8 @@ straight away, with no build and no download.
 | `--model-file PATH` | Use a GGUF you already downloaded |
 | `--yes` | No questions: take the recommendation |
 | `--dir DIR` | Keep models on another disk (default `~/.cache/kestrel/models`) |
-| `--serve` | Serve the OpenAI-compatible API instead of opening the chat |
+| `--chat` | Chat in the terminal instead of opening the dashboard |
+| `--serve` | Serve the API (and dashboard) without opening a browser |
 | `--reconfigure` | Choose another model |
 
 **If something goes wrong**
@@ -112,6 +124,7 @@ straight away, with no build and no download.
 - [Everyday use](#everyday-use)
 - [Install by hand](#install-by-hand)
 - [Usage](#usage)
+  - [Web dashboard](#web-dashboard)
   - [Commands](#commands)
   - [Planning and budgets](#planning-and-budgets)
   - [Preparing a model](#preparing-a-model-kestrel-prepare)
@@ -208,8 +221,9 @@ compile but have not been benchmarked yet.
 ## Everyday use
 
 ```bash
-kestrel                  # chat with your default model
-kestrel serve            # OpenAI-compatible API on http://127.0.0.1:8080/v1
+kestrel web              # dashboard in the browser + OpenAI-compatible API
+kestrel                  # chat in the terminal
+kestrel serve            # API and dashboard, without opening a browser
 kestrel status           # the configured model, and whether the server is running
 kestrel setup --reconfigure   # switch to another model
 ```
@@ -293,7 +307,8 @@ Models are found by path, or by (partial) name in `$KESTREL_MODELS`,
 | `kestrel hardware [--bench] [--path DIR] [--json]` | Hardware discovery; `--bench` measures RAM, disk and kernel bandwidths |
 | `kestrel plan <model> [options] [--json]` | Print the execution plan, the alternatives and the llama.cpp arguments |
 | `kestrel run [model] [-p PROMPT] [options]` | Same as `chat`; `--stats` reports memory and speed |
-| `kestrel serve [model] [--host] [--port] [options]` | OpenAI-compatible HTTP server |
+| `kestrel web [model] [--port] [options]` | Web dashboard in the browser, plus the API |
+| `kestrel serve [model] [--host] [--port] [options]` | OpenAI-compatible HTTP server (dashboard included, no browser) |
 | `kestrel prepare <model> [-o OUT] [--dry-run]` | Lossless re-layout for Kestrel's I/O (see below) |
 | `kestrel benchmark <model> [--arms ...] [--tune]` | Reproducible strategy comparison, or autotuning |
 
@@ -363,6 +378,40 @@ made no measurable difference to decode speed. It is aimed at storage where
 each request is expensive. See
 [docs/prepared-format.md](docs/prepared-format.md).
 
+### Web dashboard
+
+`kestrel web` opens it (and so does the one-step setup); `kestrel serve`
+serves it at the same address without opening a browser. It is built into
+the binary: no Node.js, no build step, no internet connection, nothing loaded
+from a CDN.
+
+![Memory page: placement of the weights, RAM budget by purpose, and the layer map with the read ring](docs/media/dashboard-memory.png)
+
+| Page | What it shows |
+|---|---|
+| **Chat** | Streaming chat with conversation history, reasoning blocks folded away, stop, regenerate, copy, Markdown export, system prompt, temperature and length. Speed and time to first token under every answer |
+| **Memory** | Where every byte of the model is *right now* (VRAM, RAM, NVMe), the RAM budget split by purpose against measured process memory, and a live layer map: which layers are resident, which stream from disk, and which are in the read ring at this moment |
+| **Experts** | MoE models: every routed expert of every layer, cached or on disk, coloured by how often it is used, with the experts routed in the last tokens highlighted; hit rate and lookahead recall |
+| **Performance** | Generation speed per request, time to first token, prompt processing, and where each request's time went (matrix products, attention, waiting for weights), with a table of every request |
+| **Plan** | The execution plan: strategy, estimated against measured speed, budgets, the alternatives that were rejected and why, model and hardware |
+| **Connect** | Base URL, model id and copy-ready snippets for curl, Python and JavaScript |
+
+![Experts page: 12 layers × 128 experts, cached experts filled, experts on disk outlined](docs/media/dashboard-experts.png)
+
+Light and dark themes, English and Spanish, and a phone layout. The
+screenshots show synthetic models (random weights), so the chat text there is
+meaningless; the memory and expert data are real.
+
+Inspired by [Colibrì](https://github.com/JustVugg/colibri)'s dashboard (chat,
+live metrics, a hardware panel, expert tiers, live routing and profiling).
+What Kestrel adds: it is compiled into the binary instead of shipped as a
+separate React build; the Memory page shows the execution plan and the RAM
+budget by purpose next to measured process memory, with a per-layer map of
+what is resident, streamed or being read; the Plan page puts the estimated
+speed next to the measured one; and every view reads a lock-free monitor, so
+it keeps updating while a request is generating. Colibrì has pages Kestrel
+does not (System One, the measured expert atlas) and more languages.
+
 ### OpenAI-compatible API
 
 ```bash
@@ -389,6 +438,9 @@ for chunk in reply:
 | `GET /v1/models` | The loaded model |
 | `GET /health` | Liveness |
 | `GET /metrics` | Prometheus metrics (`?format=json` for JSON): budgets, residency, hit rates, stall time, throughput |
+| `GET /` | The web dashboard |
+| `GET /api/info` | Model, execution plan, placement of every tensor group, hardware |
+| `GET /api/live` | Live memory, residency, read ring, caches and the last 60 requests (`?experts=1` adds the per-expert map); answers while a request is generating |
 
 ### Configuration reference
 

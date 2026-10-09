@@ -175,6 +175,20 @@ impl ExpertMetrics {
     }
 }
 
+/// See [`ExpertStore::map`].
+#[derive(Clone, Debug, Serialize)]
+pub struct ExpertMap {
+    pub layers: Vec<u32>,
+    pub n_expert: u32,
+    pub capacity: usize,
+    /// 0 = not cached, 1 = loading, 2 = cached.
+    pub cached: Vec<u8>,
+    pub usage: Vec<u64>,
+    /// Expert requests since this expert was last routed (`u64::MAX`: never).
+    pub age: Vec<u64>,
+    pub clock: u64,
+}
+
 pub struct ExpertStore {
     geom: ExpertGeometry,
     /// Per MoE layer index → position in `geom.layers`.
@@ -569,6 +583,31 @@ impl ExpertStore {
         let mut v: Vec<(u32, u32, u64)> = st.usage.iter().map(|(&(l, e), &c)| (l, e, c)).collect();
         v.sort_unstable();
         v
+    }
+
+    /// A snapshot of every routed expert for monitoring: whether it is
+    /// cached, its lifetime use count, and how many requests ago it was last
+    /// routed. Arrays are `[layer][expert]`, flattened in `layers` order.
+    pub fn map(&self) -> ExpertMap {
+        let st = self.state.lock().unwrap();
+        let n = self.geom.n_expert as usize;
+        let layers: Vec<u32> = self.geom.layers.iter().map(|(l, _)| *l).collect();
+        let total = layers.len() * n;
+        let (mut cached, mut usage, mut age) = (vec![0u8; total], vec![0u64; total], vec![u64::MAX; total]);
+        for (li, &l) in layers.iter().enumerate() {
+            for e in 0..n {
+                let k = (l, e as u32);
+                let i = li * n + e;
+                if let Some(en) = st.cache.get(&k) {
+                    cached[i] = if en.buf.ticket.is_done() { 2 } else { 1 };
+                }
+                usage[i] = st.usage.get(&k).copied().unwrap_or(0);
+                if let Some(&t) = st.last.get(&k) {
+                    age[i] = st.clock.saturating_sub(t);
+                }
+            }
+        }
+        ExpertMap { layers, n_expert: n as u32, capacity: self.capacity, cached, usage, age, clock: st.clock }
     }
 
     /// Total number of routed experts in the model.
